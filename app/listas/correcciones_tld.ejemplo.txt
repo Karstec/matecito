@@ -1,0 +1,20 @@
+# Correcciones de terminaciones mal escritas.
+# Formato:  incorrecto = correcto
+# Ejemplo:  con = com
+# (las lineas que empiezan con # son comentarios)
+
+c0m = com
+cim = com
+cmo = com
+coj = com
+comm = com
+comn = com
+con = com
+cpm = com
+ner = net
+nte = net
+ocm = com
+ogr = org
+orgg = org
+vom = com
+xom = com

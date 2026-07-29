@@ -1,0 +1,19 @@
+# Usuarios (la parte antes de la arroba) que se rechazan siempre.
+# Un usuario por linea.
+# (las lineas que empiezan con # son comentarios)
+
+elnotien
+elnotiene
+no+tiene
+no.tiene.correo
+no_oposee
+nolotiene
+nomail
+noposee
+notie
+notiene
+ntiene
+posee
+sincorreo
+sinmail
+tiene

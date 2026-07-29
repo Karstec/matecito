@@ -1,0 +1,96 @@
+============================================================
+                      M A T E c i t o
+           Validacion y depuracion de datos
+============================================================
+
+
+COMO USARLO
+-----------
+Doble clic en:  INICIAR_MATECITO.bat
+
+Se abre una ventana negra (no cerrarla mientras uses MATEcito)
+y despues se abre solo en el navegador.
+
+Para cerrar MATEcito: cerrar la ventana negra.
+
+
+LA PRIMERA VEZ
+--------------
+1. Si la computadora no tiene Python, el iniciador te avisa y
+   te dice como instalarlo. Es gratis y se hace una sola vez.
+
+2. Instala solo los componentes que necesita (tarda unos
+   minutos, solo la primera vez).
+
+3. Te pide los datos de conexion al padron BCRA:
+   servidor, puerto, servicio, usuario y contraseña.
+   Si no los tenes, pediselos al area de sistemas.
+   Se guardan cifrados: no hay que cargarlos de nuevo.
+
+
+QUE HACE
+--------
+NORMALIZACION
+  Separa celdas que tienen varios valores juntos
+  (mails y/o telefonos separados por | ) en una fila por valor.
+
+VALIDACION Y DEPURACION
+  Mails       - corrige errores de tipeo y descarta los invalidos.
+  Telefonos   - valida y separa en pais, caracteristica y numero.
+  Denominacion- compara un CUIT/DNI + nombre contra el padron BCRA.
+  Cuitificar  - trae del padron el nombre que corresponde a un CUIT/DNI.
+
+CONSULTA
+  Buscar CUIT/DNI - consulta puntual al padron. Responde en segundos.
+
+
+AJUSTAR LA VALIDACION DE MAILS
+------------------------------
+En la carpeta "listas" hay archivos de texto con los dominios,
+errores de tipeo y usuarios que MATEcito reconoce. Se pueden
+editar con el Bloc de notas para agregar o quitar segun haga
+falta. Ver listas/LEEME_LISTAS.txt para el detalle.
+
+Despues de editar, cerrar y volver a abrir MATEcito.
+
+
+DONDE QUEDAN LOS RESULTADOS
+---------------------------
+Cada proceso crea una tabla nueva en la base de datos y ademas
+deja un archivo CSV que se puede descargar desde la pantalla.
+
+Los CSV quedan en la carpeta "salidas".
+
+
+SI ALGO NO FUNCIONA
+-------------------
+- "No se encontro Python"
+      Seguir los pasos que muestra la ventana negra.
+      Al instalar Python, tildar "Add Python to PATH".
+
+- "No se pudieron instalar los componentes"
+      Revisar la conexion a internet.
+      Si la empresa usa proxy, avisar a sistemas.
+
+- "No hay credenciales del padron cargadas"
+      Cerrar MATEcito y volver a abrirlo: va a pedir los datos.
+
+- El navegador no abre solo
+      Entrar manualmente a:  http://localhost:8000
+
+- "DPY-3010: requiere modo thick"
+      El servidor Oracle es de una version anterior a la 12.1 y
+      necesita una libreria extra de Oracle (Instant Client).
+      NO se instala sola, hay que bajarla una vez:
+
+        1. Entrar a:
+           https://www.oracle.com/database/technologies/instant-client/winx64-64-downloads.html
+        2. Bajar "Basic Package" (ZIP), version 19 o superior.
+        3. Descomprimirlo.
+        4. Copiar la carpeta que sale (se llama algo como
+           "instantclient_19_XX") AL LADO de INICIAR_MATECITO.bat
+        5. Volver a abrir MATEcito.
+
+      Tambien sirve dejarla en C:\oracle\ o C:\instantclient\
+
+- Para conectarse a las bases hay que estar conectado a la VPN.

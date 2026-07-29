@@ -1,0 +1,68 @@
+# ============================================================
+#  MATEcito · .gitignore
+# ============================================================
+#  Regla de oro: al repo va CÓDIGO y CONFIGURACIÓN DE EJEMPLO.
+#  NUNCA credenciales, datos de clientes, ni archivos generados.
+# ============================================================
+
+# --- SENSIBLE: nunca subir (credenciales y datos reales) ---
+# El .enc es "ofuscación, no seguridad fuerte" (lo dice el propio
+# padron_credenciales.py): quien tenga el archivo Y el código puede
+# descifrarlo. En un repo compartido eso es una filtración.
+app/padron_conexion.enc
+padron_conexion.enc
+padron_conexion.json
+matecito_presets.json
+jueves_usuario.json
+
+# Variable de entorno con la clave de cifrado, si alguien la vuelca a archivo
+.env
+*.key
+
+# --- DATOS DE CLIENTES: jamás al repo ---
+app/salidas/
+salidas/
+*.csv
+*.xlsx
+*.xls
+# (si hiciera falta versionar un CSV de ejemplo, renombrarlo a
+#  ejemplo_*.csv y forzarlo con  git add -f)
+
+# --- LISTAS EDITABLES: el usuario las personaliza por PC ---
+# Se versiona la plantilla de ejemplo (listas/*.ejemplo.txt), no las
+# listas reales que cada despliegue ajusta.
+app/listas/*.txt
+!app/listas/*.ejemplo.txt
+
+# --- HISTORIAL Y ESTADO LOCAL ---
+matecito_historial.json
+
+# --- PYTHON ---
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+ENV/
+
+# --- ORACLE INSTANT CLIENT (binario pesado, se baja aparte) ---
+instantclient*/
+
+# --- EDITORES / SO ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- TESTS ---
+.pytest_cache/
+prueba_*.db
+*.db

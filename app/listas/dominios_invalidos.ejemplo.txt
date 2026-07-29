@@ -1,0 +1,31 @@
+# Dominios que se RECHAZAN siempre (de prueba, descartables, falsos).
+# Un dominio por linea.
+# (las lineas que empiezan con # son comentarios)
+
+02gmail.com
+1.com
+156109208.com
+29yahoo.com
+43gmail.com
+4hotmail.com
+aaa.aaa
+anse.com
+anse.gob.ar
+aoutlook.com
+asd.asd
+com.ar
+com.com
+di.com
+dominio invalido
+e-mail.com.ar
+ejemplo.com
+no.tiene
+noemail.com
+nomail.com
+noposee.com
+notiene.com
+sin.mail
+sincorreo.com
+sinmail.com
+test.com
+xxx.com

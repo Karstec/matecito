@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MATEcito — Validación y depuración de datos</title>
+<style>
+  :root{
+    /* --- Paleta AZUL (antes verde). Los nombres de variable se conservan
+       (--verde, .btn-verde, etc.) a propósito: renombrarlos tocaría 27 lugares
+       del archivo sin ningún beneficio funcional. Solo cambia el VALOR. ---
+       Base tomada de la referencia (#125183) y aclarada 3 tonos. */
+    --verde:#2A76B9;        /* base: fondo de la página, botones primarios  */
+    --verde-osc:#1B5A94;    /* oscuro: hover y estados activos              */
+    --verde-claro:#E8F1F9;  /* claro: fondos de avisos y del spinner        */
+    --carbon:#3a3a3a; --carbon-osc:#2e2e2e; --fondo:#eef0ee;
+    --carta:#ffffff; --texto:#232323; --mudo:#767676;
+    --rojo:#c0392b; --ambar:#b57e10;
+    --radio:10px;
+  }
+  /* --- Spinner de porcentaje (0-100, solo con flechas, sin tipeo libre) --- */
+  .spin{display:flex; align-items:stretch; gap:0;}
+  .spin input{
+    width:100%; border-radius:var(--radio) 0 0 var(--radio); border-right:none;
+    text-align:center; font-weight:700; font-size:1.05rem; cursor:default;
+    background:#fff;
+  }
+  /* se ocultan las flechas nativas del navegador: usamos las nuestras */
+  .spin input::-webkit-outer-spin-button,
+  .spin input::-webkit-inner-spin-button{-webkit-appearance:none; margin:0;}
+  .spin input[type=number]{-moz-appearance:textfield;}
+  .spin-flechas{display:flex; flex-direction:column; width:34px;}
+  .spin-btn{
+    flex:1; border:1px solid #cfd4cf; background:var(--verde-claro);
+    color:var(--verde-osc);           /* MISMO color arriba y abajo */
+    font-size:.72rem; line-height:1; cursor:pointer; padding:0;
+    display:flex; align-items:center; justify-content:center;
+    transition:background .12s;
+  }
+  .spin-btn:first-child{border-radius:0 var(--radio) 0 0; border-bottom:none;}
+  .spin-btn:last-child{border-radius:0 0 var(--radio) 0;}
+  .spin-btn:hover{background:#D6E6F4;}
+  .spin-btn:active{background:var(--verde); color:#fff;}
+
+  .tabla{width:100%; border-collapse:collapse; font-size:12.5px;}
+  .tabla th{text-align:left; padding:6px 8px; border-bottom:2px solid #dfe4e9;
+    color:var(--mudo); font-weight:600; position:sticky; top:0; background:var(--carta);}
+  .tabla td{padding:6px 8px; border-bottom:1px solid #eef1f4;}
+  .tabla tbody tr:hover{background:var(--verde-claro);}
+
+  .btn-mini{
+    border:1px solid var(--verde); background:var(--verde-claro); color:var(--verde-osc);
+    border-radius:6px; padding:3px 8px; font-size:12px; font-weight:600; cursor:pointer;
+    font-family:inherit; white-space:nowrap;
+  }
+  .btn-mini:hover{background:var(--verde); color:#fff;}
+
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:"Bahnschrift","Segoe UI",system-ui,sans-serif;
+    background:var(--verde); padding:18px; color:var(--texto); min-height:100vh;
+  }
+  .marco{display:flex; min-height:calc(100vh - 36px); background:var(--fondo);
+    border-radius:6px; overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,.25);}
+
+  /* ---------- SIDEBAR ---------- */
+  .sidebar{width:230px; background:var(--carbon); color:#eee; display:flex;
+    flex-direction:column; flex-shrink:0;}
+  .perfil{background:var(--carbon-osc); text-align:center; padding:26px 14px 20px;}
+  .avatar{width:74px; height:74px; margin:0 auto 10px; border-radius:50%;
+    background:#fff; display:flex; align-items:center; justify-content:center;
+    font-size:34px; cursor:pointer;}
+  .perfil .nombre{color:var(--verde); font-weight:700; letter-spacing:.12em;
+    text-transform:uppercase; font-size:14px; cursor:pointer;}
+  .perfil .rol{font-size:10px; color:#999; letter-spacing:.2em; text-transform:uppercase;
+    margin-top:3px; cursor:pointer;}
+  .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:10.5px;
+    font-weight:700; letter-spacing:.08em; text-transform:uppercase;}
+  .badge-ok{background:var(--verde-claro); color:var(--verde-osc);}
+  .badge-error{background:#fdecea; color:var(--rojo);}
+  .badge-curso{background:#fdf3e0; color:var(--ambar);}
+  .badge-int{background:#ececec; color:#666;}
+  tr.fila-hist{cursor:pointer;}
+  tr.fila-hist:hover td{background:var(--verde-claro);}
+  .hist-vacio{color:var(--mudo); font-size:14px; padding:8px 0;}
+  nav{flex:1; padding-top:14px;}
+  .navcab{display:flex; align-items:center; gap:8px; width:100%; padding:12px 16px;
+    background:none; border:none; color:#bdbdbd; font:inherit; font-size:11.5px;
+    font-weight:700; letter-spacing:.1em; text-transform:uppercase; cursor:pointer;
+    text-align:left; transition:color .15s;}
+  .navcab:hover{color:#fff;}
+  .navcab .flecha{font-size:10px; width:12px; flex-shrink:0;}
+  .navsub{overflow:hidden; max-height:0; transition:max-height .2s ease;}
+  .navgrupo.abierto .navsub{max-height:320px;}
+  .navbtn{display:flex; align-items:center; gap:10px; width:100%; padding:11px 18px 11px 30px;
+    background:none; border:none; color:#ddd; font:inherit; font-size:12.5px;
+    font-weight:700; letter-spacing:.06em; text-transform:uppercase; cursor:pointer;
+    text-align:left; border-left:4px solid transparent; transition:background .15s;}
+  .navbtn:hover{background:#444;}
+  .navbtn.activo{color:var(--verde); border-left-color:var(--verde); background:#333;}
+  .navbtn .punto{width:8px; height:8px; border-radius:50%; background:#555; flex-shrink:0;}
+  .navbtn.activo .punto{background:var(--verde);}
+  .navbtn:disabled{color:#666; cursor:default;}
+  .navbtn:disabled:hover{background:none;}
+  .sidefoot{padding:14px 18px; font-size:10px; color:#888; letter-spacing:.05em;}
+
+  /* ---------- MAIN ---------- */
+  .main{flex:1; display:flex; flex-direction:column; min-width:0;}
+  .topbar{background:var(--carbon); color:#fff; padding:12px 24px; display:flex;
+    align-items:center; justify-content:space-between;}
+  .topbar h1{font-size:15px; letter-spacing:.1em; text-transform:uppercase; font-weight:700;}
+  .topbar .chip{font-size:11px; background:var(--verde); color:#fff; padding:4px 12px;
+    border-radius:20px; letter-spacing:.05em;}
+  .contenido{padding:22px 26px; overflow-y:auto; flex:1;}
+
+  .carta{background:var(--carta); border-radius:var(--radio); padding:20px 22px;
+    margin-bottom:18px; box-shadow:0 2px 6px rgba(0,0,0,.06);}
+  .carta h2{color:var(--verde); font-size:13px; letter-spacing:.14em;
+    text-transform:uppercase; margin-bottom:14px; display:flex; align-items:center; gap:10px;}
+  .paso{width:24px; height:24px; border-radius:50%; background:var(--verde); color:#fff;
+    display:inline-flex; align-items:center; justify-content:center; font-size:12px;}
+
+  .grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px;}
+  label{display:block; font-size:11px; color:var(--mudo); letter-spacing:.08em;
+    text-transform:uppercase; margin-bottom:4px;}
+  input,select{width:100%; padding:9px 11px; border:1.5px solid #d8dcd8; border-radius:6px;
+    font:inherit; font-size:14px; background:#fafbfa;}
+  input:focus,select:focus{outline:2px solid var(--verde); border-color:var(--verde);}
+  .fila-botones{display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; align-items:center;}
+  .btn{padding:10px 20px; border:none; border-radius:6px; font:inherit; font-size:13px;
+    font-weight:700; letter-spacing:.06em; text-transform:uppercase; cursor:pointer;}
+  .btn-verde{background:var(--verde); color:#fff;}
+  .btn-verde:hover{background:var(--verde-osc);}
+  .btn-gris{background:#e4e6e4; color:#333;}
+  .btn-gris:hover{background:#d5d8d5;}
+  .btn:disabled{opacity:.45; cursor:default;}
+  .btn:focus-visible{outline:3px solid var(--verde-osc); outline-offset:2px;}
+
+  .opciones-origen{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  .opcion{border:2px solid #dfe3df; border-radius:var(--radio); padding:22px; cursor:pointer;
+    text-align:center; background:#fbfcfb; transition:border-color .15s, background .15s;}
+  .opcion:hover{border-color:var(--verde);}
+  .opcion.sel{border-color:var(--verde); background:var(--verde-claro);}
+  .opcion .icono{font-size:30px; margin-bottom:8px;}
+  .opcion b{display:block; font-size:13px; letter-spacing:.08em; text-transform:uppercase;}
+  .opcion span{font-size:12px; color:var(--mudo);}
+
+  .aviso{font-size:12.5px; padding:10px 13px; border-radius:6px; margin-top:10px;}
+  .aviso-ambar{background:#fdf3e0; color:var(--ambar); border:1px solid #eeddb8;}
+  .aviso-verde{background:var(--verde-claro); color:var(--verde-osc); border:1px solid #C3D9EC;}
+  .aviso-rojo{background:#fdecea; color:var(--rojo); border:1px solid #f2c4bf;}
+
+  .log{background:#1e1e1e; color:#d4d4d4; font-family:Consolas,monospace; font-size:12px;
+    border-radius:8px; padding:14px; height:230px; overflow-y:auto; white-space:pre-wrap;}
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-top:14px;}
+  .stat{background:var(--verde-claro); border-radius:8px; padding:12px; text-align:center;}
+  .stat .num{font-size:24px; font-weight:700; color:var(--verde-osc);}
+  .stat .lbl{font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--mudo);}
+
+  .checks{display:flex; flex-wrap:wrap; gap:8px;}
+  .chk{display:flex; align-items:center; gap:7px; background:#f4f6f4; border:1.5px solid #d8dcd8;
+    border-radius:6px; padding:7px 12px; font-size:13px; cursor:pointer; text-transform:none;
+    letter-spacing:0; color:var(--texto);}
+  .chk input{width:auto; margin:0;}
+  .chk.sel{border-color:var(--verde); background:var(--verde-claro); color:var(--verde-osc); font-weight:700;}
+
+  .oculto{display:none !important;}
+
+  /* modal */
+  .velo{position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
+    align-items:center; justify-content:center; z-index:50;}
+  .modal{background:#fff; border-radius:var(--radio); padding:22px; width:min(560px,92vw);
+    max-height:80vh; display:flex; flex-direction:column;}
+  .modal h3{color:var(--verde); font-size:13px; letter-spacing:.12em; text-transform:uppercase; margin-bottom:12px;}
+  .modal .cuerpo{overflow-y:auto; flex:1;}
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th,td{padding:7px 10px; border-bottom:1px solid #eee; text-align:left;}
+  th{color:var(--mudo); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;}
+
+  .nota-tabla{font-family:Consolas,monospace; font-size:13px; background:#f4f6f4;
+    padding:8px 12px; border-radius:6px; margin-top:8px; color:var(--verde-osc);}
+  @media (max-width:820px){ .marco{flex-direction:column;} .sidebar{width:100%;} }
+  @media (prefers-reduced-motion:reduce){ *{transition:none !important;} }
+</style>
+</head>
+<body>
+<div class="marco">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+    <div class="perfil">
+      <div class="avatar" id="logoInicio" title="Ir al inicio">🧉</div>
+      <div class="nombre" id="nombreUsuario" title="Clic para cambiar el usuario">USUARIO</div>
+      <div class="rol" id="rolInicio" title="Ir al inicio">Agente MATEcito</div>
+    </div>
+    <nav>
+      <div class="navgrupo" data-grupo="normalizacion">
+        <button class="navcab" data-grupo="normalizacion">
+          <span class="flecha">▸</span>Normalización
+        </button>
+        <div class="navsub">
+          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_telefonos"><span class="punto"></span>Teléfonos</button>
+          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_mails"><span class="punto"></span>Mails</button>
+          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_ambos"><span class="punto"></span>Teléfonos y mails</button>
+        </div>
+      </div>
+      <div class="navgrupo abierto" data-grupo="validacion">
+        <button class="navcab" data-grupo="validacion">
+          <span class="flecha">▾</span>Validación y depuración
+        </button>
+        <div class="navsub">
+          <button class="navbtn activo" data-modo="validacion" data-proceso="mails"><span class="punto"></span>Mails</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="telefonos"><span class="punto"></span>Teléfonos</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="cuit"><span class="punto"></span>Validar denominación</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>Cuitificar</button>
+        </div>
+      </div>
+      <div class="navgrupo abierto" data-grupo="redes">
+        <button class="navcab" data-grupo="redes">
+          <span class="flecha">&#9662;</span>Redes sociales
+        </button>
+        <div class="navsub">
+          <button class="navbtn" data-modo="validacion" data-proceso="comparacion"><span class="punto"></span>Comparación</button>
+        </div>
+      </div>
+      <div class="navgrupo abierto" data-grupo="consulta">
+        <button class="navcab" data-grupo="consulta">
+          <span class="flecha">▾</span>Consulta
+        </button>
+        <div class="navsub">
+          <button class="navbtn" id="btnAbrirBuscador"><span class="punto"></span>Buscar CUIT/DNI</button>
+        </div>
+      </div>
+    </nav>
+    <div class="sidefoot">MATEcito Web · local<br>API REST en /api</div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <div class="main">
+    <div class="topbar">
+      <h1 id="tituloProceso">Depuración de mails</h1>
+      <span class="chip" id="chipEstado">listo</span>
+    </div>
+    <div class="contenido">
+
+      <!-- INICIO: historial de procesos -->
+      <div class="carta oculto" id="cartaHistorial">
+        <h2>🧉 Historial de procesos</h2>
+        <div class="cuerpo" style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>Tipo</th><th>Origen</th><th>Fecha</th><th>Usuario</th><th>Estado</th><th>Resultado</th><th>CSV</th></tr></thead>
+            <tbody id="cuerpoHistorial"></tbody>
+          </table>
+          <div class="hist-vacio oculto" id="histVacio">Todavía no hay procesos ejecutados.
+            Elegí un tipo de validación en la barra lateral para empezar.</div>
+        </div>
+        <div class="fila-botones">
+          <button class="btn btn-gris" id="btnRefrescarHist">Actualizar</button>
+        </div>
+      </div>
+
+      <!-- Placeholder para procesos futuros -->
+      <div class="carta oculto" id="cartaFuturo">
+        <h2>En desarrollo</h2>
+        <p style="font-size:14px;">Este tipo de validación es parte de una etapa próxima del proyecto.
+        Por ahora están operativos <b>Depuración de mails</b> y <b>Validación de teléfonos</b>.</p>
+      </div>
+
+      <!-- PASO 1: origen -->
+      <div class="carta" id="cartaOrigen">
+        <h2><span class="paso">1</span> Origen de los datos</h2>
+        <div class="opciones-origen">
+          <div class="opcion" id="opDB" role="button" tabindex="0">
+            <div class="icono">🗄️</div><b>Base de datos</b>
+            <span>Oracle · MySQL · MariaDB</span>
+          </div>
+          <div class="opcion" id="opArchivo" role="button" tabindex="0">
+            <div class="icono">📄</div><b>Archivo plano</b>
+            <span>CSV o Excel</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- PASO 2 (DB): conexión -->
+      <div class="carta oculto" id="cartaConexion">
+        <h2><span class="paso">2</span> Conectar a la base</h2>
+        <div class="grid2">
+          <div><label>Preset guardado</label>
+            <select id="selPreset"><option value="">— Personalizado —</option></select></div>
+          <div><label>Tipo de base</label>
+            <select id="fDbType"><option value="oracle">Oracle</option>
+              <option value="mysql">MySQL</option><option value="mariadb">MariaDB</option>
+              <option value="sqlserver">SQL Server</option></select></div>
+          <div><label>Host</label><input id="fHost" placeholder="172.16.0.10"></div>
+          <div><label>Puerto</label><input id="fPort" placeholder="1521 / 3306"></div>
+          <div><label>Usuario BD</label><input id="fUser"></div>
+          <div><label>Contraseña</label><input id="fPass" type="password"></div>
+          <div><label>Base de datos / servicio</label><input id="fDbname"></div>
+        </div>
+        <div class="aviso aviso-verde" id="avisoThick">
+          Oracle: el modo <b>thin/thick</b> se resuelve solo. Si el servidor es viejo
+          (anterior a 12.1), MATEcito usa el Instant Client que esté <b>en esta máquina</b>
+          — no hace falta que lo indiques acá.
+        </div>
+        <div class="fila-botones">
+          <button class="btn btn-verde" id="btnConectar">Conectar</button>
+          <button class="btn btn-gris" id="btnGuardarPreset">Guardar preset</button>
+          <span id="msgConexion" style="font-size:13px;"></span>
+        </div>
+      </div>
+
+      <!-- PASO 3 (DB): esquema / tabla / columnas -->
+      <div class="carta oculto" id="cartaSeleccion">
+        <h2><span class="paso">3</span> Esquema, tabla y columnas</h2>
+        <div id="preguntaTabla" class="oculto" style="margin-bottom:14px;">
+          <label>¿Las dos denominaciones a comparar están en la misma tabla?</label>
+          <div class="opciones-origen" style="max-width:520px;">
+            <div class="opcion" id="opMismaTabla" role="button" tabindex="0"><b>Sí, misma tabla</b>
+              <span>elijo columna 1 y columna 2</span></div>
+            <div class="opcion" id="opTablasDistintas" role="button" tabindex="0"><b>No, tablas distintas</b>
+              <span>requiere clave de cruce</span></div>
+          </div>
+          <div class="aviso aviso-ambar oculto" id="avisoTablasDistintas">
+            La comparación entre <b>tablas distintas</b> necesita una clave de cruce (CUIT/ID)
+            para saber qué fila se compara con cuál — es parte de la próxima etapa.
+            Por ahora elegí "misma tabla".
+          </div>
+        </div>
+        <div class="grid2" id="gridSeleccion">
+          <div><label>Esquema</label><select id="selEsquema"><option value="">Elegir…</option></select></div>
+          <div><label>Tabla</label><select id="selTabla" disabled><option value="">Elegir…</option></select></div>
+          <div id="grupoTipoBusqueda" class="oculto"><label>Buscar por</label>
+            <select id="selTipoBusqueda"><option value="cuit">CUIT</option><option value="dni">DNI</option></select></div>
+          <div><label id="lblColId">Columna del CUIT / identificador</label>
+            <select id="selColId" disabled><option value="">Elegir…</option></select></div>
+          <div id="grupoColDato"><label id="lblColDato">Columna del mail a depurar</label>
+            <select id="selColDato" disabled><option value="">Elegir…</option></select></div>
+        </div>
+        <div class="fila-botones">
+          <button class="btn btn-gris" id="btnVerColumnas" disabled>Ver todas las columnas</button>
+        </div>
+      </div>
+
+      <!-- PASO 4 (DB): tabla resultado -->
+      <div class="carta oculto" id="cartaGeneracion">
+        <h2><span class="paso">4</span> Tabla de resultados</h2>
+        <div class="grid2">
+          <div><label>Usuario (automático)</label><input id="fUsuarioTabla" readonly style="background:#f0f2f0;"></div>
+          <div><label>Cliente / proyecto</label><input id="fCliente" placeholder="ej: mar del plata"></div>
+          <div id="grupoPais"><label>País de los teléfonos</label>
+            <select id="selPais"></select></div>
+          <div id="grupoUmbral">
+            <label>% mínimo de coincidencia</label>
+            <div class="spin">
+              <input id="fUmbral" type="number" min="0" max="100" step="1" value="80" readonly>
+              <div class="spin-flechas">
+                <button type="button" class="spin-btn" data-target="fUmbral" data-paso="1"  aria-label="Subir">▲</button>
+                <button type="button" class="spin-btn" data-target="fUmbral" data-paso="-1" aria-label="Bajar">▼</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="aviso aviso-verde oculto" id="avisoCuitificacion">
+          Se busca cada número en el padrón BCRA y se trae su denominación.
+          <b>Una fila por cada denominación distinta</b>: si un número devuelve 3 nombres,
+          se generan 3 filas y las tres quedan con <b>REVISION = SI</b>.
+        </div>
+        <div class="aviso aviso-verde oculto" id="avisoCuit">
+          Se compara el CUIT/DNI y la denominación contra el padrón BCRA. Estados posibles:
+          <b>CUIT y denominación coincidentes</b>, <b>solo CUIT coincidente</b>
+          (el número existe pero el nombre no da), <b>solo denominación coincidente</b>
+          (el CUIT del origen está mal, pero por DNI la persona sí está) y
+          <b>no coincide ningún parámetro</b>.
+        </div>
+        <div class="aviso aviso-ambar oculto" id="avisoUmbral">
+          A partir de <b><span id="txtUmbral">80</span>%</b> dos denominaciones se informan como
+          <b>coincidentes</b>. El porcentaje calculado se guarda igual en todas las filas,
+          así el mismo lote se puede releer con otro criterio sin volver a procesar.
+        </div>
+        <div class="aviso aviso-ambar" id="avisoCliente">
+          ⚠ Si dejás <b>Cliente</b> vacío, la tabla se crea sin ese dato:
+          quedará <b>usuario_fecha</b> solamente.
+        </div>
+        <div class="nota-tabla">Se creará: <b id="previewTabla">—</b></div>
+        <div class="fila-botones">
+          <button class="btn btn-verde" id="btnIniciarDB">Generar tabla e iniciar proceso</button>
+        </div>
+      </div>
+
+      <!-- PASO 2 (ARCHIVO) -->
+      <div class="carta oculto" id="cartaArchivo">
+        <h2><span class="paso">2</span> Archivo a procesar</h2>
+        <div class="grid2">
+          <div><label>Archivo CSV o Excel</label><input type="file" id="fArchivo" accept=".csv,.xlsx,.xlsm,.xls,.txt"></div>
+          <div id="grupoPaisArch"><label>País de los teléfonos</label><select id="selPaisArch"></select></div>
+          <div id="grupoUmbralArch">
+            <label>% mínimo de coincidencia</label>
+            <div class="spin">
+              <input id="fUmbralArch" type="number" min="0" max="100" step="1" value="80" readonly>
+              <div class="spin-flechas">
+                <button type="button" class="spin-btn" data-target="fUmbralArch" data-paso="1"  aria-label="Subir">▲</button>
+                <button type="button" class="spin-btn" data-target="fUmbralArch" data-paso="-1" aria-label="Bajar">▼</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="aviso aviso-verde">El CSV con los resultados se genera automáticamente
+          al terminar: se descarga en tu PC y se informa la ruta donde quedó guardado en el servidor.</div>
+        <div class="fila-botones">
+          <button class="btn btn-verde" id="btnIniciarArchivo">Procesar archivo</button>
+        </div>
+      </div>
+
+      <!-- PASO 2 (ARCHIVO, NORMALIZACIÓN) -->
+      <div class="carta oculto" id="cartaArchivoNorm">
+        <h2><span class="paso">2</span> Archivo a normalizar</h2>
+        <div class="grid2">
+          <div><label>Archivo CSV o Excel</label><input type="file" id="fArchivoN" accept=".csv,.xlsx,.xlsm,.xls,.txt"></div>
+        </div>
+        <div class="aviso aviso-verde" style="margin-top:6px;">
+          Se detectan solas la columna clave (CUIT/ID) y las columnas de <b id="txtMediosNorm">teléfonos y mails</b>.
+          Cada valor separado por “|” pasa a su propia fila (mismo CUIT), deduplicando repetidos.
+          El resto de las columnas se conservan. El CSV normalizado se descarga al terminar.
+        </div>
+        <div class="fila-botones">
+          <button class="btn btn-verde" id="btnIniciarArchivoN">Normalizar archivo</button>
+        </div>
+      </div>
+
+      <!-- PROGRESO -->
+      <div class="carta oculto" id="cartaProgreso">
+        <h2><span class="paso">▶</span> Progreso de la ejecución</h2>
+        <div class="log" id="logProceso"></div>
+        <div class="stats oculto" id="statsProceso"></div>
+        <div class="aviso aviso-verde oculto" id="avisoRutaCsv"></div>
+        <div class="fila-botones oculto" id="filaCsv">
+          <span style="font-size:14px;">¿Querés descargar los resultados en un CSV?</span>
+          <button class="btn btn-verde" id="btnDescargarCsv">Sí, descargar CSV</button>
+          <button class="btn btn-gris" id="btnNoCsv">No, gracias</button>
+        </div>
+        <!-- Queda SIEMPRE disponible: decir "no" no debe perder el archivo. -->
+        <div class="fila-botones oculto" id="filaCsvLuego">
+          <span style="font-size:14px; color:var(--mudo);">El CSV quedó guardado en el servidor.
+            Podés bajarlo ahora o después, desde Inicio → historial.</span>
+          <button class="btn btn-gris" id="btnDescargarCsvLuego">⬇ Descargar CSV</button>
+        </div>
+        <div class="fila-botones">
+          <button class="btn btn-gris" id="btnNuevoProceso">Nuevo proceso</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Modal columnas -->
+<div class="velo oculto" id="veloColumnas">
+  <div class="modal">
+    <h3>Columnas de la tabla</h3>
+    <div class="cuerpo"><table id="tablaColumnas">
+      <thead><tr><th>Columna</th><th>Tipo</th><th>Largo</th></tr></thead><tbody></tbody>
+    </table></div>
+    <div class="fila-botones"><button class="btn btn-gris" id="btnCerrarColumnas">Cerrar</button></div>
+  </div>
+</div>
+
+<!-- Modal confirmación cliente vacío -->
+<div class="velo oculto" id="veloConfirma">
+  <div class="modal">
+    <h3>Cliente vacío</h3>
+    <p style="font-size:14px; line-height:1.5;">No indicaste el nombre del cliente.
+      La tabla se va a crear <b>solo con usuario y fecha</b>:<br>
+      <span class="nota-tabla" id="previewSinCliente" style="display:inline-block; margin-top:8px;"></span></p>
+    <div class="fila-botones">
+      <button class="btn btn-verde" id="btnConfirmarSin">Aceptar y generar</button>
+      <button class="btn btn-gris" id="btnCancelarSin">Volver y completar</button>
+    </div>
+  </div>
+</div>
+
+<div class="velo oculto" id="veloBuscador">
+  <div class="modal" style="max-width:820px">
+    <h3>Buscar CUIT / DNI en el padrón</h3>
+    <p style="font-size:13px; color:var(--mudo); margin:6px 0 12px">
+      Consulta directa al padrón BCRA. No valida ni genera tabla: solo informa qué hay.
+    </p>
+    <div style="display:flex; gap:8px; align-items:center">
+      <input id="fBuscar" placeholder="20123456786 o 12345678" style="flex:1"
+             autocomplete="off">
+      <button class="btn btn-verde" id="btnBuscarPadron">Buscar</button>
+      <button class="btn btn-gris" id="btnCerrarBuscador">Cerrar</button>
+    </div>
+    <div class="aviso aviso-ambar" style="margin-top:10px">
+      Escribí el <b>CUIT o DNI completo</b>. La búsqueda es exacta y usa el
+      índice del padrón: responde en segundos. Un DNI puede devolver varias
+      personas (mismo número, distinto prefijo de CUIT).
+    </div>
+    <div id="resBuscador" style="margin-top:12px"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let estado = { modo:"validacion", proceso:"mails", origen:null, session:null,
+  usuario:"", pollTimer:null, jobId:null, esArchivo:false, columnasN:[] };
+
+// Qué medios normaliza cada opción del grupo Normalización
+const MEDIOS_NORM = {
+  norm_telefonos: ["telefonos"],
+  norm_mails: ["mails"],
+  norm_ambos: ["telefonos", "mails"],
+};
+
+/* ---------- inicio ---------- */
+async function init(){
+  const r = await fetch("/api/estado").then(x=>x.json());
+  estado.usuario = r.usuario || "";
+  estado.agenteMails = r.agente_mails;
+  if(!r.agente_mails){
+    const av = document.createElement("div");
+    av.className = "aviso aviso-rojo";
+    av.style.margin = "0 0 16px";
+    av.innerHTML = `⚠ <b>El agente de mails no está disponible.</b> ${r.agente_mails_error||""}
+      <br>La validación de teléfonos funciona igual. Corregí la ubicación de jueves.py y reiniciá el servidor.`;
+    document.querySelector(".contenido").prepend(av);
+  }
+  if(!estado.usuario){ cambiarUsuario(true); }
+  $("nombreUsuario").textContent = estado.usuario || "USUARIO";
+  $("fUsuarioTabla").value = estado.usuario;
+  for(const sel of [$("selPais"), $("selPaisArch")]){
+    sel.innerHTML = "";
+    for(const [cod, nom] of Object.entries(r.paises_telefono))
+      sel.add(new Option(`${nom} (${cod})`, cod));
+  }
+  cargarPresets();
+  actualizarPreview();
+  irInicio();
+}
+async function cambiarUsuario(forzado){
+  const u = prompt("Nombre de usuario (se usa para nombrar las tablas de resultados):", estado.usuario || "");
+  if(u === null && !forzado) return;
+  const val = (u||"").trim();
+  if(!val){ if(forzado) return cambiarUsuario(true); return; }
+  await fetch("/api/usuario",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({usuario:val})});
+  estado.usuario = val;
+  $("nombreUsuario").textContent = val;
+  $("fUsuarioTabla").value = val;
+  actualizarPreview();
+}
+$("nombreUsuario").onclick = ()=>cambiarUsuario(false);
+
+/* ---------- inicio (historial) ---------- */
+const TITULOS = {mails:"Depuración de mails", telefonos:"Validación de teléfonos",
+  cuitificacion:"Cuitificación", denominacion:"Validación de denominación",
+  comparacion:"Redes sociales · Comparación de denominaciones",
+  cuit:"Validación de denominación",
+  norm_telefonos:"Normalización de teléfonos", norm_mails:"Normalización de mails",
+  norm_ambos:"Normalización de teléfonos y mails", normalizacion:"Normalización"};
+
+function ocultarTodo(){
+  ["cartaOrigen","cartaConexion","cartaSeleccion","cartaGeneracion",
+   "cartaArchivo","cartaArchivoNorm","cartaProgreso","cartaFuturo","cartaHistorial"]
+   .forEach(id=>$(id).classList.add("oculto"));
+}
+
+async function irInicio(){
+  detenerPoll();
+  ocultarTodo();
+  document.querySelectorAll(".navbtn").forEach(x=>x.classList.remove("activo"));
+  $("tituloProceso").textContent = "Inicio — historial de procesos";
+  $("chipEstado").textContent = "inicio";
+  $("cartaHistorial").classList.remove("oculto");
+  await cargarHistorial();
+}
+$("logoInicio").onclick = irInicio;
+$("rolInicio").onclick = irInicio;
+$("btnRefrescarHist").onclick = cargarHistorial;
+
+function fmtFecha(iso){
+  if(!iso) return "—";
+  const d = new Date(iso), p = n=>String(n).padStart(2,"0");
+  return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function badgeEstado(e){
+  const m = {OK:["badge-ok","Exitoso"], ERROR:["badge-error","Falló"],
+    EN_CURSO:["badge-curso","En curso"], INTERRUMPIDO:["badge-int","Interrumpido"]};
+  const [cls, txt] = m[e] || ["badge-int", e];
+  return `<span class="badge ${cls}">${txt}</span>`;
+}
+async function cargarHistorial(){
+  const hist = await fetch("/api/historial").then(x=>x.json()).catch(()=>[]);
+  const tb = $("cuerpoHistorial");
+  tb.innerHTML = "";
+  $("histVacio").classList.toggle("oculto", hist.length>0);
+  for(const e of hist){
+    const tr = document.createElement("tr");
+    tr.className = "fila-hist";
+    tr.title = "Clic para ver el detalle";
+    const resultado = e.tabla_resultado || (e.csv ? "CSV" : (e.error ? String(e.error).slice(0,50) : "—"));
+    // Botón de descarga directo en la lista: el CSV vive en el SERVIDOR, así
+    // que se puede volver a bajar cuando sea, aunque en su momento se haya
+    // dicho "No, gracias" o se entre después desde otra PC.
+    const celdaCsv = e.tiene_csv
+      ? `<button class="btn-mini" data-csv="${e.id}" title="Descargar el CSV a tu PC">⬇ Descargar</button>`
+      : `<span style="color:var(--mudo); font-size:12px;">—</span>`;
+    tr.innerHTML = `<td>${TITULOS[e.tipo]||e.tipo}</td>
+      <td>${e.descripcion||"—"}</td>
+      <td>${fmtFecha(e.fecha_inicio)}</td>
+      <td>${e.usuario||"—"}</td>
+      <td>${badgeEstado(e.estado)}</td>
+      <td style="font-family:Consolas,monospace; font-size:12px;">${resultado}</td>
+      <td>${celdaCsv}</td>`;
+    tr.onclick = ev=>{
+      // el botón de descarga no debe abrir también el detalle
+      if(ev.target.closest("[data-csv]")) return;
+      verDetalle(e);
+    };
+    const btn = tr.querySelector("[data-csv]");
+    if(btn) btn.onclick = ()=>{ window.location = `/api/procesos/${e.id}/csv`; };
+    tb.appendChild(tr);
+  }
+}
+function verDetalle(e){
+  ocultarTodo();
+  estado.esArchivo = false;  // desde el historial nunca se auto-descarga
+  $("tituloProceso").textContent = `${TITULOS[e.tipo]||e.tipo} — detalle`;
+  // arrancarSeguimiento trae el log completo; si sigue EN_CURSO retoma el
+  // vivo, y si ya terminó muestra stats + opción de CSV en una sola pasada.
+  arrancarSeguimiento(e.id);
+}
+
+/* ---------- navegación: grupos colapsables ---------- */
+document.querySelectorAll(".navcab").forEach(cab=>{
+  cab.onclick = ()=>{
+    const grupo = cab.closest(".navgrupo");
+    grupo.classList.toggle("abierto");
+    const f = cab.querySelector(".flecha");
+    if(f) f.textContent = grupo.classList.contains("abierto") ? "▾" : "▸";
+  };
+});
+
+/* ---------- navegación de procesos ---------- */
+document.querySelectorAll(".navbtn").forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll(".navbtn").forEach(x=>x.classList.remove("activo"));
+    b.classList.add("activo");
+    estado.modo = b.dataset.modo;
+    estado.proceso = b.dataset.proceso;
+    $("tituloProceso").textContent = TITULOS[estado.proceso];
+    reiniciarWizard();
+  };
+});
+
+function reiniciarWizard(){
+  detenerPoll();
+  ocultarTodo();
+  $("opDB").classList.remove("sel"); $("opArchivo").classList.remove("sel");
+  estado.origen = null;
+
+  if(estado.modo==="normalizacion"){
+    // La normalización es SOLO por archivo plano: se salta la elección de
+    // origen y se muestra directamente la carta de archivo.
+    estado.origen = "archivo";
+    estado.esArchivo = true;
+    $("cartaOrigen").classList.add("oculto");
+    $("cartaFuturo").classList.add("oculto");
+    const medios = MEDIOS_NORM[estado.proceso] || [];
+    $("txtMediosNorm").textContent =
+      medios.length===2 ? "teléfonos y mails" : (medios[0]==="telefonos" ? "teléfonos" : "mails");
+    $("cartaArchivoNorm").classList.remove("oculto");
+    $("chipEstado").textContent = "listo";
+    return;
+  }
+
+  // modo validación
+  const disponible = ["mails","telefonos","denominacion","cuitificacion","cuit","comparacion"].includes(estado.proceso);
+  $("cartaOrigen").classList.toggle("oculto", !disponible);
+  $("cartaFuturo").classList.toggle("oculto", disponible);
+  const esCuit = estado.proceso==="cuitificacion";
+  const esValidCuit = estado.proceso==="cuit";
+  if(estado.proceso==="denominacion" || estado.proceso==="comparacion"){
+    $("lblColId").textContent = "Columna 1 — denominación origen";
+    $("lblColDato").textContent = "Columna 2 — denominación a validar";
+  }else if(esCuit){
+    $("lblColId").textContent = "Columna del CUIT o DNI";
+  }else if(esValidCuit){
+    $("lblColId").textContent = "Columna del CUIT o DNI";
+    $("lblColDato").textContent = "Columna de la denominación";
+  }else{
+    $("lblColId").textContent = "Columna del CUIT / identificador";
+    $("lblColDato").textContent = estado.proceso==="mails" ? "Columna del mail a depurar" : "Columna del teléfono a depurar";
+  }
+  // Cuitificación usa UNA sola columna: el número. La denominación NO se aporta,
+  // se TRAE del padrón. Por eso se oculta el segundo desplegable.
+  // Validación de CUIT sí usa dos columnas (número + denominación a comparar).
+  $("grupoColDato").classList.toggle("oculto", esCuit);
+  $("avisoCuitificacion").classList.toggle("oculto", !esCuit);
+  $("avisoCuit").classList.toggle("oculto", !esValidCuit);
+  // El selector CUIT/DNI aparece en cuitificación y en validación de CUIT.
+  $("grupoTipoBusqueda").classList.toggle("oculto", !(esCuit || esValidCuit));
+  $("grupoPais").classList.toggle("oculto", estado.proceso!=="telefonos");
+  $("grupoPaisArch").classList.toggle("oculto", estado.proceso!=="telefonos");
+  // El umbral aplica a denominación Y a validación de CUIT (compara nombres).
+  const usaUmbral = estado.proceso==="denominacion" || esValidCuit;
+  $("grupoUmbral").classList.toggle("oculto", !usaUmbral);
+  $("grupoUmbralArch").classList.toggle("oculto", !usaUmbral);
+  $("avisoUmbral").classList.toggle("oculto", !usaUmbral);
+  $("chipEstado").textContent = "listo";
+}
+
+/* ---------- paso 1: origen ---------- */
+function elegirOrigen(o){
+  estado.origen = o;
+  $("opDB").classList.toggle("sel", o==="db");
+  $("opArchivo").classList.toggle("sel", o==="archivo");
+  $("cartaConexion").classList.toggle("oculto", o!=="db");
+  $("cartaArchivo").classList.toggle("oculto", o!=="archivo");
+  $("cartaSeleccion").classList.add("oculto");
+  $("cartaGeneracion").classList.add("oculto");
+  $("cartaProgreso").classList.add("oculto");
+}
+$("opDB").onclick = ()=>elegirOrigen("db");
+$("opArchivo").onclick = ()=>elegirOrigen("archivo");
+for(const op of [$("opDB"), $("opArchivo")])
+  op.onkeydown = e=>{ if(e.key==="Enter"||e.key===" ") op.click(); };
+
+/* ---------- presets ---------- */
+async function cargarPresets(){
+  const p = await fetch("/api/presets").then(x=>x.json());
+  const sel = $("selPreset");
+  sel.innerHTML = '<option value="">— Personalizado —</option>';
+  Object.keys(p).forEach(n=>sel.add(new Option(n,n)));
+  sel.dataset.presets = JSON.stringify(p);
+}
+$("selPreset").onchange = ()=>{
+  const p = JSON.parse($("selPreset").dataset.presets||"{}")[$("selPreset").value];
+  if(!p) return;
+  $("fDbType").value = p.db_type||"oracle"; $("fHost").value = p.host||"";
+  $("fPort").value = p.port||""; $("fUser").value = p.user||"";
+  $("fDbname").value = p.dbname||"";
+};
+$("btnGuardarPreset").onclick = async ()=>{
+  const nombre = prompt("Nombre del preset (ej: Mar del Plata):");
+  if(!nombre) return;
+  await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({nombre, datos:{
+      db_type:$("fDbType").value, host:$("fHost").value, port:$("fPort").value,
+      user:$("fUser").value, dbname:$("fDbname").value}})});
+  await cargarPresets();
+  $("selPreset").value = nombre;
+  $("msgConexion").textContent = `Preset "${nombre}" guardado (sin contraseña).`;
+};
+
+/* ---------- paso 2: conectar ---------- */
+$("btnConectar").onclick = async ()=>{
+  $("msgConexion").textContent = "Conectando…"; $("btnConectar").disabled = true;
+  try{
+    const r = await fetch("/api/conexion",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({db_type:$("fDbType").value, host:$("fHost").value, port:$("fPort").value,
+        user:$("fUser").value, password:$("fPass").value, dbname:$("fDbname").value,
+        })});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail||"Error de conexión");
+    estado.session = j.session_id;
+    $("msgConexion").innerHTML = '<span style="color:var(--verde-osc)">✔ Conectado</span>';
+    $("chipEstado").textContent = "conectado";
+
+    const sel = $("selEsquema");
+    sel.innerHTML = '<option value="">Elegir…</option>';
+    j.esquemas.forEach(e=>sel.add(new Option(e,e)));
+    $("cartaSeleccion").classList.remove("oculto");
+    const esDenom = estado.proceso==="denominacion" || estado.proceso==="comparacion";
+    $("preguntaTabla").classList.toggle("oculto", !esDenom);
+    $("gridSeleccion").classList.toggle("oculto", esDenom);
+    $("opMismaTabla").classList.remove("sel"); $("opTablasDistintas").classList.remove("sel");
+    $("avisoTablasDistintas").classList.add("oculto");
+  }catch(e){
+    $("msgConexion").innerHTML = `<span style="color:var(--rojo)">✖ ${e.message}</span>`;
+  }finally{ $("btnConectar").disabled = false; }
+};
+
+/* ---------- pregunta misma tabla (denominación) ---------- */
+$("opMismaTabla").onclick = ()=>{
+  $("opMismaTabla").classList.add("sel"); $("opTablasDistintas").classList.remove("sel");
+  $("avisoTablasDistintas").classList.add("oculto");
+  $("gridSeleccion").classList.remove("oculto");
+};
+$("opTablasDistintas").onclick = ()=>{
+  $("opTablasDistintas").classList.add("sel"); $("opMismaTabla").classList.remove("sel");
+  $("avisoTablasDistintas").classList.remove("oculto");
+  $("gridSeleccion").classList.add("oculto");
+  $("cartaGeneracion").classList.add("oculto");
+};
+for(const op of [$("opMismaTabla"), $("opTablasDistintas")])
+  op.onkeydown = e=>{ if(e.key==="Enter"||e.key===" ") op.click(); };
+
+/* ---------- paso 3: esquema → tabla → columnas ---------- */
+$("selEsquema").onchange = async ()=>{
+  const esq = $("selEsquema").value;
+  const selT = $("selTabla");
+  selT.innerHTML = '<option value="">Elegir…</option>'; selT.disabled = !esq;
+  $("selColId").disabled = $("selColDato").disabled = $("btnVerColumnas").disabled = true;
+  $("cartaGeneracion").classList.add("oculto");
+  if(!esq) return;
+  const j = await fetch(`/api/conexion/${estado.session}/tablas?esquema=${encodeURIComponent(esq)}`).then(x=>x.json());
+  (j.tablas||[]).forEach(t=>selT.add(new Option(t,t)));
+};
+$("selTabla").onchange = async ()=>{
+  const esq = $("selEsquema").value, tab = $("selTabla").value;
+  const s1 = $("selColId"), s2 = $("selColDato");
+  s1.innerHTML = s2.innerHTML = '<option value="">Elegir…</option>';
+  s1.disabled = s2.disabled = $("btnVerColumnas").disabled = !tab;
+  $("cartaGeneracion").classList.add("oculto");
+  if(!tab) return;
+  const j = await fetch(`/api/conexion/${estado.session}/columnas?esquema=${encodeURIComponent(esq)}&tabla=${encodeURIComponent(tab)}`).then(x=>x.json());
+  estado.columnas = j.columnas||[];
+  estado.columnas.forEach(c=>{ s1.add(new Option(c.nombre,c.nombre)); s2.add(new Option(c.nombre,c.nombre)); });
+};
+function chequearColumnas(){
+  // Cuitificación usa UNA sola columna (el número): la denominación no se
+  // aporta, se TRAE del padrón. El resto de los procesos necesita las dos.
+  const soloUna = estado.proceso==="cuitificacion";
+  const listo = soloUna ? !!$("selColId").value
+                        : ($("selColId").value && $("selColDato").value);
+  if(listo){
+    $("cartaGeneracion").classList.remove("oculto");
+    actualizarPreview();
+  }
+}
+$("selColId").onchange = chequearColumnas;
+$("selColDato").onchange = chequearColumnas;
+
+$("btnVerColumnas").onclick = ()=>{
+  const tb = $("tablaColumnas").querySelector("tbody");
+  tb.innerHTML = "";
+  (estado.columnas||[]).forEach(c=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.nombre}</td><td>${c.tipo||""}</td><td>${c.largo??""}</td>`;
+    tb.appendChild(tr);
+  });
+  $("veloColumnas").classList.remove("oculto");
+};
+$("btnCerrarColumnas").onclick = ()=>$("veloColumnas").classList.add("oculto");
+
+/* ---------- paso 4: preview + iniciar ---------- */
+function sanitizar(t){ return (t||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"")
+  .replace(/[^A-Za-z0-9]+/g,"_").replace(/^_+|_+$/g,"").toUpperCase(); }
+function ahoraTs(){
+  const d = new Date(), p = n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function actualizarPreview(){
+  const u = sanitizar(estado.usuario)||"USUARIO", c = sanitizar($("fCliente").value);
+  $("previewTabla").textContent = c ? `${u}_${c}_${ahoraTs()}` : `${u}_${ahoraTs()}`;
+  $("avisoCliente").classList.toggle("oculto", !!c);
+}
+$("fCliente").oninput = actualizarPreview;
+
+$("btnIniciarDB").onclick = ()=>{
+  if(!$("fCliente").value.trim()){
+    $("previewSinCliente").textContent = `${sanitizar(estado.usuario)||"USUARIO"}_${ahoraTs()}`;
+    $("veloConfirma").classList.remove("oculto");
+    return;
+  }
+  iniciarProcesoDB();
+};
+$("btnConfirmarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); iniciarProcesoDB(); };
+$("btnCancelarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); $("fCliente").focus(); };
+
+
+/* ---------- buscador de CUIT/DNI en el padrón (consulta, no validación) ---------- */
+// No requiere conexión a una base: MATEcito se conecta al padrón por su cuenta
+// con las credenciales cifradas (modo 'auto'). El sid se manda igual por si el
+// servidor estuviera forzado a modo DBLINK.
+$("btnAbrirBuscador").onclick = ()=>{
+  $("veloBuscador").classList.remove("oculto");
+  $("resBuscador").innerHTML = "";
+  $("fBuscar").value = "";
+  $("fBuscar").focus();
+};
+$("btnCerrarBuscador").onclick = ()=>$("veloBuscador").classList.add("oculto");
+$("fBuscar").onkeydown = e=>{ if(e.key==="Enter") buscarPadron(); };
+$("btnBuscarPadron").onclick = ()=>buscarPadron();
+
+async function buscarPadron(){
+  const num = $("fBuscar").value.trim();
+  if(!num){ return; }
+  const cont = $("resBuscador");
+  cont.innerHTML = `<div class="aviso aviso-ambar">Buscando en el padrón…</div>`;
+  $("btnBuscarPadron").disabled = true;
+  try{
+    const sid = estado.session ? `&sid=${encodeURIComponent(estado.session)}` : "";
+    const r = await fetch(`/api/padron/buscar?numero=${encodeURIComponent(num)}${sid}`);
+    const j = await r.json();
+    if(!r.ok){ cont.innerHTML = `<div class="aviso aviso-rojo">${j.detail||"Error al consultar"}</div>`; return; }
+
+    if(!j.encontrados){
+      cont.innerHTML = `<div class="aviso aviso-rojo">
+        No se encontró ningún registro con <b>${j.numero}</b> en el padrón BCRA.</div>`;
+      return;
+    }
+    let html = `<div style="font-size:13px; color:var(--mudo); margin-bottom:6px">
+       ${j.encontrados} coincidencia(s) para <b>${j.numero}</b>`;
+    if(j.truncado) html += ` — se muestran las primeras ${j.limite}, hay más`;
+    html += `</div><div style="max-height:340px; overflow:auto">
+      <table class="tabla"><thead><tr>
+      <th>CUIT</th><th>DNI</th><th>Denominación</th><th>Sexo</th>
+      <th>F. nac.</th><th>Provincia</th><th>Baja</th></tr></thead><tbody>`;
+    for(const f of j.filas){
+      const baja = (f.MARCA_BAJA||"").trim();
+      const fall = (f.FECHA_FALLECIMIENTO||"").trim();
+      let alerta = "";
+      // El padrón marca la baja con '*' (nulo = activo), confirmado sobre los datos.
+      if(fall) alerta = `<span style="color:var(--rojo)">† ${fall}</span>`;
+      else if(baja === "*") alerta = `<span style="color:var(--ambar)">baja</span>`;
+      else alerta = "—";
+      html += `<tr>
+        <td style="font-family:Consolas,monospace">${f.CUIT||"—"}</td>
+        <td style="font-family:Consolas,monospace">${f.DNI||"—"}</td>
+        <td>${f.DENOMINACION||f.NOMBRE_LIMPIO||"—"}</td>
+        <td>${f.SEXO||"—"}</td>
+        <td>${f.FECHA_NACIMIENTO||"—"}</td>
+        <td>${f.PROVINCIA||"—"}</td>
+        <td>${alerta}</td></tr>`;
+    }
+    html += "</tbody></table></div>";
+    cont.innerHTML = html;
+  }catch(e){
+    cont.innerHTML = `<div class="aviso aviso-rojo">No se pudo consultar el padrón: ${e}</div>`;
+  }finally{
+    $("btnBuscarPadron").disabled = false;
+  }
+}
+
+/* ---------- spinner de umbral (0-100, solo con flechas) ----------
+   El input es readonly a propósito: el porcentaje NO se tipea libre, se
+   sube y se baja con las flechas (ambas del mismo color). Se mantiene
+   como <input type=number> para que el teclado (↑/↓) también funcione. */
+function ajustarSpin(idInput, paso){
+  const el = $(idInput);
+  let v = parseInt(el.value, 10);
+  if(isNaN(v)) v = 80;
+  v = Math.min(100, Math.max(0, v + paso));
+  el.value = v;
+  if(idInput === "fUmbral") $("txtUmbral").textContent = v;
+}
+document.querySelectorAll(".spin-btn").forEach(b=>{
+  let timer=null, repite=null;
+  const uno = ()=>ajustarSpin(b.dataset.target, parseInt(b.dataset.paso,10));
+  b.onclick = uno;
+  // mantener apretado = repetir (subir/bajar de a poco, cómodo hasta 100)
+  b.onmousedown = ()=>{ timer = setTimeout(()=>{ repite = setInterval(uno, 70); }, 400); };
+  const soltar = ()=>{ clearTimeout(timer); clearInterval(repite); };
+  b.onmouseup = soltar; b.onmouseleave = soltar;
+});
+for(const id of ["fUmbral","fUmbralArch"]){
+  $(id).onkeydown = e=>{
+    if(e.key==="ArrowUp"){ e.preventDefault(); ajustarSpin(id, 1); }
+    if(e.key==="ArrowDown"){ e.preventDefault(); ajustarSpin(id, -1); }
+  };
+}
+
+function umbralElegido(idInput){
+  const v = parseInt($(idInput).value, 10);
+  return isNaN(v) ? 80 : Math.min(100, Math.max(0, v));
+}
+
+async function iniciarProcesoDB(){
+  estado.esArchivo = false;
+  const r = await fetch("/api/procesos/db",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({session_id:estado.session, proceso:estado.proceso,
+      esquema:$("selEsquema").value, tabla:$("selTabla").value,
+      col_id:$("selColId").value, col_dato:$("selColDato").value,
+      tipo_busqueda:$("selTipoBusqueda").value,
+      usuario:estado.usuario, cliente:$("fCliente").value, pais:$("selPais").value,
+      umbral:umbralElegido("fUmbral")})});
+  const j = await r.json();
+  if(!r.ok){ alert(j.detail||"Error al iniciar el proceso"); return; }
+  arrancarSeguimiento(j.job_id);
+}
+
+/* ---------- archivo plano ---------- */
+$("btnIniciarArchivo").onclick = async ()=>{
+  const f = $("fArchivo").files[0];
+  if(!f){ alert("Elegí un archivo CSV o Excel primero."); return; }
+  estado.esArchivo = true;
+  const fd = new FormData();
+  fd.append("proceso", estado.proceso);
+  fd.append("pais", $("selPaisArch").value);
+  fd.append("umbral", umbralElegido("fUmbralArch"));
+  fd.append("tipo_busqueda", $("selTipoBusqueda") ? $("selTipoBusqueda").value : "cuit");
+  fd.append("archivo", f);
+  $("btnIniciarArchivo").disabled = true;
+  try{
+    const r = await fetch("/api/procesos/archivo",{method:"POST", body:fd});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail||"Error al procesar el archivo");
+    arrancarSeguimiento(j.job_id);
+  }catch(e){ alert(e.message); }
+  finally{ $("btnIniciarArchivo").disabled = false; }
+};
+
+$("btnIniciarArchivoN").onclick = async ()=>{
+  const f = $("fArchivoN").files[0];
+  if(!f){ alert("Elegí un archivo CSV o Excel primero."); return; }
+  estado.esArchivo = true;
+  const medios = MEDIOS_NORM[estado.proceso] || [];
+  const fd = new FormData();
+  fd.append("medios", medios.join(","));
+  fd.append("archivo", f);
+  $("btnIniciarArchivoN").disabled = true;
+  try{
+    const r = await fetch("/api/normalizacion/archivo",{method:"POST", body:fd});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail||"Error al normalizar el archivo");
+    arrancarSeguimiento(j.job_id);
+  }catch(e){ alert(e.message); }
+  finally{ $("btnIniciarArchivoN").disabled = false; }
+};
+
+/* ---------- seguimiento de progreso ---------- */
+function detenerPoll(){ if(estado.pollTimer){ clearInterval(estado.pollTimer); estado.pollTimer=null; } }
+function arrancarSeguimiento(jobId){
+  estado.jobId = jobId;
+  $("cartaProgreso").classList.remove("oculto");
+  $("logProceso").textContent = "";
+  $("statsProceso").classList.add("oculto");
+  $("filaCsv").classList.add("oculto");
+  $("filaCsvLuego").classList.add("oculto");
+  $("avisoRutaCsv").classList.add("oculto");
+  $("chipEstado").textContent = "ejecutando…";
+  $("cartaProgreso").scrollIntoView({behavior:"smooth"});
+  let desde = 0;
+  detenerPoll();
+  estado.pollTimer = setInterval(async ()=>{
+    const j = await fetch(`/api/procesos/${jobId}?desde=${desde}`).then(x=>x.json());
+    if(j.log.length){
+      $("logProceso").textContent += j.log.join("\n")+"\n";
+      $("logProceso").scrollTop = $("logProceso").scrollHeight;
+      desde = j.total_log;
+    }
+    if(j.estado !== "EN_CURSO"){
+      detenerPoll();
+      $("chipEstado").textContent = j.estado==="OK" ? "finalizado"
+        : (j.estado==="INTERRUMPIDO" ? "interrumpido" : "error");
+      if(j.estado==="OK"){ mostrarResultado(j); }
+      else if(j.tiene_csv){ $("filaCsvLuego").classList.remove("oculto"); }
+    }
+  }, 700);
+}
+function mostrarResultado(j){
+  const s = j.stats||{}, cont = $("statsProceso");
+  cont.innerHTML = "";
+  const esNorm = estado.modo==="normalizacion";
+  const etiquetas = {total: esNorm ? "Filas resultado" : "Total",
+    validos:"Válidos", bajas:"Bajas", moviles:"Móviles",
+    fijos:"Fijos", conservados:"Conservados", modificados:"Modificados", revision_manual:"Rev. manual",
+    coincidentes:"Coincidentes", parciales:"Parciales", sin_coincidencia:"Sin coincidencia",
+    cuit_unicos:"CUIT únicos", medios:"Medios (tel + mail)",
+    numeros_unicos:"CUIT/DNI únicos", encontrados:"Encontrados",
+    no_encontrados:"Sin match", en_revision:"A revisar",
+    validados:"Validados", solo_cuit:"Solo CUIT", solo_denom:"Solo denominación",
+    no_coincide:"No coincide", pendientes:"A decidir", dni_invalido:"DNI inválido",
+    con_alerta:"Con alerta"};
+  for(const [k,v] of Object.entries(s))
+    cont.innerHTML += `<div class="stat"><div class="num">${v}</div><div class="lbl">${etiquetas[k]||k}</div></div>`;
+  cont.classList.remove("oculto");
+  if(estado.esArchivo){
+    // archivo plano: el CSV se genera y descarga automáticamente
+    descargarCsv();
+    $("avisoRutaCsv").innerHTML = `✔ CSV generado y descargado por tu navegador:
+      quedó en la carpeta de <b>Descargas de TU PC</b>.<br>
+      <span style="color:var(--mudo)">Queda además una copia en la carpeta <b>salidas</b> del
+      <b>servidor</b> donde corre MATEcito (no en tu PC). Podés volver a bajarlo cuando quieras
+      desde <b>Inicio → historial</b>.</span>`;
+    $("avisoRutaCsv").classList.remove("oculto");
+    if(j.tiene_csv) $("filaCsvLuego").classList.remove("oculto");
+  }else if(j.tiene_csv){
+    // base directa: se le pregunta al usuario
+    $("filaCsv").classList.remove("oculto");
+  }
+}
+function descargarCsv(){ window.location = `/api/procesos/${estado.jobId}/csv`; }
+$("btnDescargarCsv").onclick = ()=>{
+  descargarCsv();
+  $("filaCsv").classList.add("oculto");
+  $("filaCsvLuego").classList.remove("oculto");   // sigue disponible por si hace falta de nuevo
+};
+$("btnNoCsv").onclick = ()=>{
+  $("filaCsv").classList.add("oculto");
+  $("filaCsvLuego").classList.remove("oculto");   // decir "no" NO pierde el archivo
+};
+$("btnDescargarCsvLuego").onclick = ()=>descargarCsv();
+$("btnNuevoProceso").onclick = ()=>{
+  if(document.querySelector(".navbtn.activo")) reiniciarWizard();
+  else irInicio();
+};
+
+init();
+</script>
+</body>
+</html>

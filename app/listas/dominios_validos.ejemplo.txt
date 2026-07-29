@@ -1,0 +1,47 @@
+# Dominios que se aceptan como validos sin revisar.
+# Un dominio por linea.
+# (las lineas que empiezan con # son comentarios)
+
+adinet.com.uy
+aerolineas.com.ar
+alontur.com.uy
+arnet.com.ar
+claro.com.ar
+cloud.com
+cousa.com
+email.com
+estancialosmolles.uy
+fibertel.com.ar
+gmail.com
+grupodeleon.com.uy
+hotmail.com
+hotmail.com.ar
+icloud.com
+lipin.com.uy
+live.com
+live.com.ar
+mail.com
+me.com
+mercadolibre.com
+movistar.com.ar
+msn.com
+olminco.com
+outlook.com
+outlook.com.ar
+personal.com.ar
+pili.com.uy
+prontometal.com
+protonmail.com
+siet.com.uy
+speedy.com.ar
+techint.com
+telecentro.com.ar
+tenaris.com
+ternium.com
+trali.com.uy
+vera.com.uy
+viseport.com.uy
+waveautomotores.com.uy
+yahoo.com
+yahoo.com.ar
+ypf.com

@@ -1,0 +1,16 @@
+# Terminaciones que van en el medio (com.ar, org.ar...).
+# Una por linea, sin el punto.
+# (las lineas que empiezan con # son comentarios)
+
+biz
+cat
+co
+com
+edu
+gob
+gov
+gub
+mil
+net
+org
+pro

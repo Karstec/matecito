@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MATEcito · Mapa interactivo</title>
+<style>
+  :root {
+    --verde: #3B6D11; --verde-bg: #EAF3DE; --verde-bd: #97C459;
+    --teal: #0F6E56; --teal-bg: #E1F5EE; --teal-bd: #5DCAA5;
+    --violeta: #3C3489; --violeta-bd: #7F77DD;
+    --ambar: #854F0B; --ambar-bg: #FAEEDA; --ambar-bd: #EF9F27;
+    --tinta: #2C2C2A; --gris: #5F5E5A; --linea: #D3D1C7;
+    --papel: #FBFAF7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--papel); color: var(--tinta);
+    line-height: 1.5; padding: 24px; max-width: 1000px; margin: 0 auto;
+  }
+  header { margin-bottom: 8px; }
+  h1 { font-size: 26px; font-weight: 600; color: #1F4E78; }
+  h1 .mate { font-size: 28px; }
+  .sub { color: var(--gris); font-size: 14px; margin-top: 2px; }
+  .barra {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin: 16px 0; align-items: center;
+  }
+  .btn {
+    font-family: inherit; font-size: 13px; cursor: pointer;
+    background: #fff; border: 1px solid var(--linea); border-radius: 8px;
+    padding: 6px 12px; color: var(--tinta); transition: background .15s;
+  }
+  .btn:hover { background: #F1EFE8; }
+  .leyenda { display: flex; gap: 14px; flex-wrap: wrap; margin-left: auto; font-size: 12px; color: var(--gris); align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; }
+  .cuad { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .cuad.v { background: var(--verde-bg); border: 1px solid var(--verde-bd); }
+  .cuad.t { background: var(--teal-bg); border: 1px solid var(--teal-bd); }
+  .cuad.p { background: #fff; border: 1px dashed var(--violeta-bd); }
+
+  ul { list-style: none; padding-left: 0; }
+  .nivel ul { padding-left: 26px; border-left: 1px solid var(--linea); margin-left: 12px; }
+  li { margin: 5px 0; }
+
+  .nodo {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 13px; border-radius: 10px; font-size: 14px;
+    border: 1px solid var(--linea); background: #fff; cursor: default;
+    transition: box-shadow .15s;
+  }
+  .nodo.clic { cursor: pointer; }
+  .nodo.clic:hover { box-shadow: 0 1px 6px rgba(0,0,0,.08); }
+  .nodo .flecha {
+    font-size: 11px; color: var(--gris); width: 12px;
+    transition: transform .15s; display: inline-block;
+  }
+  .nodo.abierto .flecha { transform: rotate(90deg); }
+  .nodo .tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; font-weight: 500; }
+
+  .grupo   { background: var(--ambar-bg); border-color: var(--ambar-bd); color: var(--ambar); font-weight: 600; }
+  .funcion { background: var(--verde-bg); border-color: var(--verde-bd); color: var(--verde); font-weight: 500; }
+  .origen  { background: #fff; border-color: var(--linea); color: var(--gris); font-size: 13px; }
+  .salida  { background: var(--teal-bg); border-color: var(--teal-bd); color: var(--teal); }
+  .salida .tag { background: var(--teal-bd); color: #04342C; }
+  .pend    { background: #fff; border: 1px dashed var(--violeta-bd); color: var(--violeta); }
+  .pend .tag { background: #EEEDFE; color: var(--violeta); }
+
+  .desc { color: var(--gris); font-size: 12.5px; margin-left: 4px; }
+  .oculto { display: none; }
+  .seccion-titulo { font-size: 15px; font-weight: 600; color: var(--violeta); margin: 22px 0 4px; }
+  footer { margin-top: 28px; font-size: 12px; color: var(--gris); border-top: 1px solid var(--linea); padding-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mate">🧉</span> MATEcito</h1>
+  <div class="sub">Mapa interactivo · qué está desarrollado y qué falta · clic en cada nodo para desplegar</div>
+</header>
+
+<div class="barra">
+  <button class="btn" onclick="todos(true)">Expandir todo</button>
+  <button class="btn" onclick="todos(false)">Colapsar todo</button>
+  <div class="leyenda">
+    <span class="chip"><span class="cuad v"></span>desarrollado</span>
+    <span class="chip"><span class="cuad t"></span>salida que produce</span>
+    <span class="chip"><span class="cuad p"></span>a desarrollar</span>
+  </div>
+</div>
+
+<div id="arbol" class="nivel"></div>
+
+<footer>
+  Generado a partir del código real de MATEcito. Los orígenes (base / archivo plano)
+  producen la misma salida; por base además se crea una tabla en el esquema, por archivo solo el CSV.
+</footer>
+
+<script>
+// ============================================================
+// DATOS — reflejan el código real. Editar acá para actualizar el mapa.
+//   tipo: grupo | funcion | pend
+//   origen: lista de orígenes que soporta ("base", "archivo", "consulta")
+//   salida: qué produce
+//   hijos: sub-nodos (para grupos)
+// ============================================================
+const DATOS = [
+  { tipo:"grupo", nombre:"Normalización", desc:"preparar el dato antes de validar", hijos:[
+    { tipo:"funcion", nombre:"Separar celdas", desc:"mails y/o teléfonos en una misma celda",
+      origen:["base","archivo"], salida:"Una fila por valor, repitiendo la clave" },
+  ]},
+  { tipo:"grupo", nombre:"Validación y depuración", desc:"revisar y corregir cada dato", hijos:[
+    { tipo:"funcion", nombre:"Mails", desc:"corrige typos de dominio, descarta lo que no es real",
+      origen:["base","archivo"], salida:"Mail depurado · válido/baja · motivo" },
+    { tipo:"funcion", nombre:"Teléfonos", desc:"valida contra el plan de numeración del país",
+      origen:["base","archivo"], salida:"País · característica · número · tipo (F/C) · E.164" },
+    { tipo:"funcion", nombre:"Denominación", desc:"CUIT/DNI + nombre contra el padrón BCRA",
+      origen:["base","archivo"], salida:"4 estados · % coincidencia · alertas (baja/fallecim./reemplazo)" },
+    { tipo:"funcion", nombre:"Cuitificar", desc:"trae del padrón el nombre de un CUIT/DNI",
+      origen:["base","archivo"], salida:"CUIT + denominación · una fila por persona · revisión si hay varias" },
+  ]},
+  { tipo:"grupo", nombre:"Consulta", desc:"mirar un caso puntual", hijos:[
+    { tipo:"funcion", nombre:"Buscar CUIT/DNI", desc:"consulta puntual al padrón, responde en segundos",
+      origen:["consulta"], salida:"Datos de la persona en pantalla (no genera tabla ni CSV)" },
+  ]},
+  { tipo:"grupo", nombre:"Redes sociales", desc:"comparar denominaciones", hijos:[
+    { tipo:"funcion", nombre:"Comparación", desc:"dos columnas de nombres · 6 algoritmos",
+      origen:["base","archivo"], salida:"Un % por algoritmo · promedio/máx/mín/dispersión · motivo" },
+  ]},
+];
+
+const PENDIENTES = [
+  { nombre:"Cotejo con 2 orígenes",
+    desc:"tabla de personas vs otra tabla o archivo (bases posiblemente distintas). Bloqueado: si hay clave común se resuelve por índice; si no, hace falta blocking o no escala." },
+  { nombre:"SQL Server (pyodbc)",
+    desc:"cuarto motor de base de datos. Diferido; el resto del código ya lo contempla." },
+  { nombre:"Multi-usuario en AWS",
+    desc:"hosting concurrente con la clave de cifrado en MATECITO_KEY (Secrets Manager). El código de credenciales ya está preparado." },
+  { nombre:"Normalización por base en la UI",
+    desc:"el endpoint /api/normalizacion/db ya existe; falta exponerlo en la interfaz (hoy la normalización se usa por archivo)." },
+];
+
+// ============================================================
+// RENDER
+// ============================================================
+const OK = "listo", SAL = "salida", ORI = { base:"base de datos", archivo:"archivo plano", consulta:"consulta directa" };
+
+function nodoFuncion(f) {
+  const li = document.createElement("li");
+  const cab = document.createElement("span");
+  cab.className = "nodo funcion clic";
+  cab.innerHTML = `<span class="flecha">▶</span> ${f.nombre}` +
+                  (f.desc ? ` <span class="desc">${f.desc}</span>` : "");
+  const sub = document.createElement("ul");
+  sub.className = "oculto";
+
+  // orígenes
+  (f.origen||[]).forEach(o => {
+    const lio = document.createElement("li");
+    lio.innerHTML = `<span class="nodo origen">↳ origen: ${ORI[o]||o}</span>`;
+    sub.appendChild(lio);
+  });
+  // salida
+  if (f.salida) {
+    const lis = document.createElement("li");
+    lis.innerHTML = `<span class="nodo salida"><span class="tag">${SAL}</span> ${f.salida}</span>`;
+    sub.appendChild(lis);
+  }
+
+  cab.onclick = () => { cab.classList.toggle("abierto"); sub.classList.toggle("oculto"); };
+  li.appendChild(cab); li.appendChild(sub);
+  return li;
+}
+
+function nodoGrupo(g) {
+  const li = document.createElement("li");
+  const cab = document.createElement("span");
+  cab.className = "nodo grupo clic abierto";
+  cab.innerHTML = `<span class="flecha">▶</span> ${g.nombre}` +
+                  (g.desc ? ` <span class="desc">${g.desc}</span>` : "");
+  const sub = document.createElement("ul");
+  g.hijos.forEach(h => sub.appendChild(nodoFuncion(h)));
+  cab.onclick = () => { cab.classList.toggle("abierto"); sub.classList.toggle("oculto"); };
+  li.appendChild(cab); li.appendChild(sub);
+  return li;
+}
+
+function render() {
+  const cont = document.getElementById("arbol");
+  const ul = document.createElement("ul");
+  DATOS.forEach(g => ul.appendChild(nodoGrupo(g)));
+  cont.appendChild(ul);
+
+  const tit = document.createElement("div");
+  tit.className = "seccion-titulo";
+  tit.textContent = "A desarrollar";
+  cont.appendChild(tit);
+
+  const ulp = document.createElement("ul");
+  PENDIENTES.forEach(p => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="nodo pend"><span class="tag">pendiente</span> ${p.nombre}</span>` +
+                   `<div class="desc" style="margin:4px 0 0 8px">${p.desc}</div>`;
+    ulp.appendChild(li);
+  });
+  cont.appendChild(ulp);
+}
+
+function todos(abrir) {
+  document.querySelectorAll(".nodo.clic").forEach(n => {
+    const sub = n.parentElement.querySelector("ul");
+    if (!sub) return;
+    n.classList.toggle("abierto", abrir);
+    sub.classList.toggle("oculto", !abrir);
+  });
+}
+
+render();
+</script>
+</body>
+</html>

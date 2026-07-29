@@ -1,0 +1,17 @@
+# Proveedores de webmail mundiales. Solo contra estos se corrigen typos
+# por parecido. NO agregar dominios de empresas: se romperian mails validos.
+# (las lineas que empiezan con # son comentarios)
+
+gmail.com
+hotmail.com
+hotmail.com.ar
+icloud.com
+live.com
+live.com.ar
+me.com
+msn.com
+outlook.com
+outlook.com.ar
+protonmail.com
+yahoo.com
+yahoo.com.ar

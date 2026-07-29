@@ -1,0 +1,10 @@
+# Textos que, si aparecen en el dominio, lo marcan como institucional
+# (gob, gov, muni...). Uno por linea.
+# (las lineas que empiezan con # son comentarios)
+
+afip
+anses
+arca
+bna
+bpba
+jus.mendoza.gov.ar

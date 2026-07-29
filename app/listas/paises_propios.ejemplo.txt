@@ -1,0 +1,34 @@
+# Terminaciones de pais que se conservan al corregir (ej: hotmail.com.ar
+# no se aplana a hotmail.com). Una terminacion por linea, sin el punto.
+# (las lineas que empiezan con # son comentarios)
+
+ar
+bb
+bo
+br
+bs
+bz
+ca
+cl
+co
+cr
+cu
+do
+ec
+gt
+gy
+hn
+ht
+jm
+mx
+ni
+pa
+pe
+pr
+py
+sr
+sv
+tt
+us
+uy
+ve

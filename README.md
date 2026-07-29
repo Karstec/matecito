@@ -1,5 +1,3 @@
-# MATEcito
-
 Validación y depuración de datos de contacto e identificación, con comparación
 contra el padrón BCRA. Repositorio **privado**.
 
@@ -60,3 +58,7 @@ falta. Después, `documentacion/ARQUITECTURA.md`.
 - **Los comentarios del código explican el _porqué_ de cada línea** y se
   quedan en los `.py`. La documentación explica el _qué_ y el _cómo_ del
   sistema. Son cosas distintas; ver `documentacion/DECISIONES_TECNICAS.md`.
+=======
+# matecito
+app matecito para validacion y depuracion
+>>>>>>> d1035c5a1a2a25e66d705261e0abc846595736f5

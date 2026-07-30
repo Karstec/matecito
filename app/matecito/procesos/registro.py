@@ -23,6 +23,10 @@ CAMPOS
 """
 
 PROCESOS = {
+    "osint": {
+        "cols_origen": 1, "padron": False, "umbral": False,
+        "etiqueta": "OSINT de mails",
+    },
     "mails": {
         "cols_origen": 1, "padron": False, "umbral": False,
         "etiqueta": "Validación de mails",

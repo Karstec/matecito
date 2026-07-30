@@ -11,6 +11,7 @@ jellyfish>=1.0
 oracledb>=2.0
 cryptography>=42.0
 mysql-connector-python>=8.3
+user-scanner>=1.4
 
 # SQL Server (diferido; descomentar cuando se active)
 # pyodbc>=5.1

@@ -163,6 +163,14 @@
     letter-spacing:0; color:var(--texto);}
   .chk input{width:auto; margin:0;}
   .chk.sel{border-color:var(--verde); background:var(--verde-claro); color:var(--verde-osc); font-weight:700;}
+  .osint-barra{display:flex; gap:8px; align-items:end; flex-wrap:wrap; margin-top:12px;}
+  .osint-busqueda{flex:1; min-width:240px;}
+  .osint-lista{max-height:310px; overflow-y:auto; border:1.5px solid #d8dcd8;
+    border-radius:8px; padding:10px; margin-top:10px; background:#fafbfa;
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px;}
+  .osint-lista .chk{margin:0;}
+  .osint-contador{font-size:12px; color:var(--verde-osc); font-weight:700;
+    min-width:120px; padding-bottom:9px;}
 
   .oculto{display:none !important;}
 
@@ -210,6 +218,7 @@
         </button>
         <div class="navsub">
           <button class="navbtn activo" data-modo="validacion" data-proceso="mails"><span class="punto"></span>Mails</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="osint"><span class="punto"></span>OSINT</button>
           <button class="navbtn" data-modo="validacion" data-proceso="telefonos"><span class="punto"></span>Teléfonos</button>
           <button class="navbtn" data-modo="validacion" data-proceso="cuit"><span class="punto"></span>Validar denominación</button>
           <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>Cuitificar</button>
@@ -407,6 +416,23 @@
         </div>
         <div class="aviso aviso-verde">El CSV con los resultados se genera automáticamente
           al terminar: se descarga en tu PC y se informa la ruta donde quedó guardado en el servidor.</div>
+        <div id="grupoOsint" class="oculto">
+          <label>Proveedores OSINT</label>
+          <div class="aviso aviso-ambar">
+            La consulta se ejecutará únicamente contra los proveedores seleccionados.
+            Sólo se ofrecen consultas silenciosas que no deberían avisar al titular.
+          </div>
+          <div class="osint-barra">
+            <div class="osint-busqueda">
+              <label for="buscarProveedorOsint">Buscar por proveedor o categoría</label>
+              <input id="buscarProveedorOsint" type="search" placeholder="Ej.: GitHub, Social, CRM…">
+            </div>
+            <button type="button" class="btn btn-gris" id="btnSeleccionarVisibles">Seleccionar visibles</button>
+            <button type="button" class="btn btn-gris" id="btnLimpiarProveedores">Limpiar</button>
+            <span id="contadorProveedoresOsint" class="osint-contador">0 seleccionados</span>
+          </div>
+          <div id="proveedoresOsint" class="osint-lista"></div>
+        </div>
         <div class="fila-botones">
           <button class="btn btn-verde" id="btnIniciarArchivo">Procesar archivo</button>
         </div>
@@ -504,6 +530,58 @@
 const $ = id => document.getElementById(id);
 let estado = { modo:"validacion", proceso:"mails", origen:null, session:null,
   usuario:"", pollTimer:null, jobId:null, esArchivo:false, columnasN:[] };
+let proveedoresOsintCargados = false;
+
+function actualizarSeleccionOsint(){
+  const checks = [...document.querySelectorAll('input[name="proveedorOsint"]')];
+  checks.forEach(c=>c.closest("label").classList.toggle("sel", c.checked));
+  const cantidad = checks.filter(c=>c.checked).length;
+  $("contadorProveedoresOsint").textContent =
+    `${cantidad} seleccionado${cantidad===1 ? "" : "s"}`;
+}
+
+function filtrarProveedoresOsint(){
+  const filtro = $("buscarProveedorOsint").value.trim().toLowerCase();
+  document.querySelectorAll("#proveedoresOsint label").forEach(label=>{
+    label.classList.toggle("oculto", !label.dataset.busqueda.includes(filtro));
+  });
+}
+
+async function cargarProveedoresOsint(){
+  if(proveedoresOsintCargados) return;
+  const contenedor = $("proveedoresOsint");
+  contenedor.innerHTML = "<span>Cargando proveedores…</span>";
+  try{
+    const r = await fetch("/api/osint/proveedores");
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail||"OSINT no disponible");
+    contenedor.innerHTML = j.proveedores.map(p =>
+      `<label class="chk" data-busqueda="${`${p.nombre} ${p.categoria}`.toLowerCase()}">
+       <input type="checkbox" name="proveedorOsint" value="${p.id}">
+       ${p.nombre} <small>(${p.categoria})</small></label>`).join("");
+    contenedor.querySelectorAll('input[name="proveedorOsint"]').forEach(
+      check=>check.onchange = actualizarSeleccionOsint
+    );
+    proveedoresOsintCargados = true;
+    actualizarSeleccionOsint();
+  }catch(e){
+    contenedor.innerHTML = `<span>${e.message}</span>`;
+  }
+}
+
+$("buscarProveedorOsint").oninput = filtrarProveedoresOsint;
+$("btnSeleccionarVisibles").onclick = ()=>{
+  document.querySelectorAll("#proveedoresOsint label:not(.oculto) input").forEach(
+    check=>check.checked = true
+  );
+  actualizarSeleccionOsint();
+};
+$("btnLimpiarProveedores").onclick = ()=>{
+  document.querySelectorAll('input[name="proveedorOsint"]').forEach(
+    check=>check.checked = false
+  );
+  actualizarSeleccionOsint();
+};
 
 // Qué medios normaliza cada opción del grupo Normalización
 const MEDIOS_NORM = {
@@ -552,7 +630,7 @@ async function cambiarUsuario(forzado){
 $("nombreUsuario").onclick = ()=>cambiarUsuario(false);
 
 /* ---------- inicio (historial) ---------- */
-const TITULOS = {mails:"Depuración de mails", telefonos:"Validación de teléfonos",
+const TITULOS = {mails:"Depuración de mails", osint:"OSINT de mails", telefonos:"Validación de teléfonos",
   cuitificacion:"Cuitificación", denominacion:"Validación de denominación",
   comparacion:"Redes sociales · Comparación de denominaciones",
   cuit:"Validación de denominación",
@@ -674,6 +752,20 @@ function reiniciarWizard(){
     return;
   }
 
+  if(estado.proceso==="osint"){
+    estado.origen = "archivo";
+    estado.esArchivo = true;
+    $("cartaOrigen").classList.add("oculto");
+    $("cartaFuturo").classList.add("oculto");
+    $("cartaArchivo").classList.remove("oculto");
+    $("grupoPaisArch").classList.add("oculto");
+    $("grupoUmbralArch").classList.add("oculto");
+    $("grupoOsint").classList.remove("oculto");
+    cargarProveedoresOsint();
+    $("chipEstado").textContent = "listo";
+    return;
+  }
+
   // modo validación
   const disponible = ["mails","telefonos","denominacion","cuitificacion","cuit","comparacion"].includes(estado.proceso);
   $("cartaOrigen").classList.toggle("oculto", !disponible);
@@ -702,6 +794,7 @@ function reiniciarWizard(){
   $("grupoTipoBusqueda").classList.toggle("oculto", !(esCuit || esValidCuit));
   $("grupoPais").classList.toggle("oculto", estado.proceso!=="telefonos");
   $("grupoPaisArch").classList.toggle("oculto", estado.proceso!=="telefonos");
+  $("grupoOsint").classList.add("oculto");
   // El umbral aplica a denominación Y a validación de CUIT (compara nombres).
   const usaUmbral = estado.proceso==="denominacion" || esValidCuit;
   $("grupoUmbral").classList.toggle("oculto", !usaUmbral);
@@ -991,6 +1084,13 @@ $("btnIniciarArchivo").onclick = async ()=>{
   fd.append("pais", $("selPaisArch").value);
   fd.append("umbral", umbralElegido("fUmbralArch"));
   fd.append("tipo_busqueda", $("selTipoBusqueda") ? $("selTipoBusqueda").value : "cuit");
+  const proveedores = [...document.querySelectorAll('input[name="proveedorOsint"]:checked')]
+    .map(el=>el.value);
+  if(estado.proceso==="osint" && proveedores.length===0){
+    alert("Elegí al menos un proveedor OSINT.");
+    return;
+  }
+  fd.append("proveedores_osint", estado.proceso==="osint" ? proveedores.join(",") : "");
   fd.append("archivo", f);
   $("btnIniciarArchivo").disabled = true;
   try{

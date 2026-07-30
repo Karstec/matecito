@@ -43,6 +43,7 @@ from matecito.nucleo.claves_padron import (armar_claves, consultar_padron,
                            buscar_filas_cuit, buscar_filas_dni)
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
+from matecito.validadores import osint_email
 
 # =====================================================================
 # PADRON BCRA - CONFIGURACION
@@ -1239,6 +1240,17 @@ def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
         fijos = sum(1 for r in resultados if r["TIPO_LINEA"] == "FIJO")
         job.stats = {"total": total, "validos": validos, "bajas": total - validos,
                      "moviles": moviles, "fijos": fijos}
+    elif proceso == "osint":
+        job.stats = {
+            "total": total,
+            "consultados": sum(1 for r in resultados if r.get("PROVEEDOR")),
+            "registrados": sum(
+                1 for r in resultados if r.get("ESTADO_OSINT") == "Registered"
+            ),
+            "errores": sum(
+                1 for r in resultados if r.get("ESTADO_OSINT") == "Error"
+            ),
+        }
     else:
         bajas = sum(1 for r in resultados if r["ESTADO"] == "BAJA")
         mods = sum(1 for r in resultados if r["ESTADO"] == "MODIFICADO")
@@ -1259,7 +1271,7 @@ def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
 def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                           nombre_original, pais, delim=",",
                           umbral=UMBRAL_COINCIDENTE_DEFAULT,
-                          tipo_busqueda="cuit"):
+                          tipo_busqueda="cuit", proveedores_osint=None):
     """Procesa un archivo plano (CSV/Excel ya leído a filas) y genera el CSV
     de salida automáticamente."""
     try:
@@ -1274,6 +1286,10 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
             if EmailAgent is None:
                 raise RuntimeError(f"No se pudo importar el agente de mails: {EMAIL_AGENT_ERR}")
             agente = EmailAgent(dir_listas=DIR_LISTAS)
+        if proceso == "osint":
+            proveedores_osint = proveedores_osint or []
+            if not proveedores_osint:
+                raise RuntimeError("Elegí al menos un proveedor OSINT.")
 
         # --- Procesos que consultan el PADRÓN ---
         # Mismo enfoque que el flujo de base de datos: Python abre su propia
@@ -1368,6 +1384,8 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                     continue
                 id_val = fila[idx_id] if (idx_id is not None and idx_id < len(fila)) else i
                 dato = fila[idx_dato] if idx_dato < len(fila) else ""
+                if proceso == "osint":
+                    continue
                 if proceso == "denominacion":
                     nom2 = fila[idx_dato] if idx_dato < len(fila) else ""
                     resultados.append(fila_resultado_denominacion(id_val, nom2, ahora, umbral=umbral))
@@ -1384,6 +1402,38 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                     resultados.append(_procesar_fila_mail(agente, id_val, dato, ahora))
                 if i % 5000 == 0:
                     job.escribir(f"  …{i}/{len(filas)}")
+
+        if proceso == "osint":
+            entradas = []
+            for i, fila in enumerate(filas, 1):
+                if not fila:
+                    continue
+                id_val = fila[idx_id] if (idx_id is not None and idx_id < len(fila)) else i
+                email = str(fila[idx_dato] if idx_dato < len(fila) else "").strip()
+                entradas.append((id_val, email))
+            validos = list(dict.fromkeys(
+                email for _, email in entradas if osint_email.email_valido(email)
+            ))
+            job.escribir(
+                f"Consultando OSINT para {len(validos)} mails válidos en "
+                f"{len(proveedores_osint)} proveedores…"
+            )
+            por_mail = {}
+            for hallazgo in osint_email.scan_many(validos, proveedores_osint):
+                por_mail.setdefault(hallazgo["MAIL"], []).append(hallazgo)
+            resultados = []
+            for id_val, email in entradas:
+                hallazgos = por_mail.get(email, [])
+                if hallazgos:
+                    resultados.extend({"ID_ORIGEN": id_val, **h} for h in hallazgos)
+                else:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "MAIL INVALIDO", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Sintaxis de email inválida",
+                        "DATOS_OSINT": "{}",
+                    })
 
         base = os.path.splitext(os.path.basename(nombre_original))[0]
         nombre_base = f"{sanitizar_identificador(base)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1523,6 +1573,14 @@ def estado(request: Request):
     }
 
 
+@app.get("/api/osint/proveedores")
+def listar_proveedores_osint():
+    try:
+        return {"ok": True, "proveedores": osint_email.proveedores_disponibles()}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
 @app.post("/api/usuario")
 def set_usuario(req: UsuarioRequest, request: Request, response: Response):
     """Guarda el usuario para ESTE navegador (cookie de sesión). También lo
@@ -1602,6 +1660,8 @@ def procesar_db(req: ProcesoDBRequest):
     # tupla escrita a mano que hay que acordarse de actualizar.
     if not proceso_valido(req.proceso):
         raise HTTPException(400, "Proceso no disponible todavía.")
+    if req.proceso == "osint":
+        raise HTTPException(400, "OSINT se procesa mediante un archivo CSV o Excel.")
     if req.proceso == "cuit" and not (req.col_id and req.col_dato):
         raise HTTPException(400, "Elegí la columna del CUIT/DNI y la de la denominación.")
     if req.proceso == "cuit" and not (0 <= req.umbral <= 100):
@@ -1732,7 +1792,7 @@ def _detectar_columnas(encabezado, filas, proceso):
         if len(idxs) < 2:
             idxs = [0, 1]
         return idxs[0], idxs[1]  # (columna 1 = origen, columna 2 = a validar)
-    claves_dato = ("mail", "correo", "email") if proceso == "mails" else \
+    claves_dato = ("mail", "correo", "email") if proceso in ("mails", "osint") else \
                   ("tel", "cel", "movil", "móvil", "fono", "whatsapp")
     idx_dato, idx_id = None, None
     if encabezado:
@@ -1746,7 +1806,7 @@ def _detectar_columnas(encabezado, filas, proceso):
         # sin encabezado útil: para mails, la columna con '@'; para teléfonos,
         # la columna con más dígitos
         fila0 = filas[0]
-        if proceso == "mails":
+        if proceso in ("mails", "osint"):
             for i, c in enumerate(fila0):
                 if "@" in str(c):
                     idx_dato = i
@@ -1849,6 +1909,7 @@ async def procesar_archivo(request: Request,
                            proceso: str = Form(...), pais: str = Form("AR"),
                            umbral: float = Form(UMBRAL_COINCIDENTE_DEFAULT),
                            tipo_busqueda: str = Form("cuit"),
+                           proveedores_osint: str = Form(""),
                            archivo: UploadFile = File(...)):
     # La lista de procesos válidos sale del registro PROCESOS (igual que el
     # endpoint de base de datos), no de una tupla escrita a mano.
@@ -1861,6 +1922,21 @@ async def procesar_archivo(request: Request,
     if not filas:
         raise HTTPException(400, "El archivo está vacío o no se pudo leer.")
     idx_id, idx_dato = _detectar_columnas(encabezado, filas, proceso)
+    proveedores = [p.strip() for p in proveedores_osint.split(",") if p.strip()]
+    if proceso == "osint" and not proveedores:
+        raise HTTPException(400, "Elegí al menos un proveedor OSINT.")
+    if proveedores and proceso != "osint":
+        raise HTTPException(400, "Los proveedores sólo aplican al proceso OSINT.")
+    if proveedores:
+        try:
+            disponibles = {p["id"] for p in osint_email.proveedores_disponibles()}
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        desconocidos = sorted(set(proveedores) - disponibles)
+        if desconocidos:
+            raise HTTPException(
+                400, f"Proveedores OSINT no disponibles: {', '.join(desconocidos)}"
+            )
     job = Job(proceso, origen="archivo", descripcion=archivo.filename,
               usuario=usuario_de_sesion(request))
     JOBS[job.id] = job
@@ -1872,7 +1948,7 @@ async def procesar_archivo(request: Request,
     t = threading.Thread(target=_job_procesar_archivo,
                          args=(job, proceso, filas, encabezado, idx_id, idx_dato,
                                archivo.filename, pais, delim, umbral,
-                               tipo_busqueda), daemon=True)
+                               tipo_busqueda, proveedores), daemon=True)
     t.start()
     return {"ok": True, "job_id": job.id}
 

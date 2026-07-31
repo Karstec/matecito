@@ -752,22 +752,8 @@ function reiniciarWizard(){
     return;
   }
 
-  if(estado.proceso==="osint"){
-    estado.origen = "archivo";
-    estado.esArchivo = true;
-    $("cartaOrigen").classList.add("oculto");
-    $("cartaFuturo").classList.add("oculto");
-    $("cartaArchivo").classList.remove("oculto");
-    $("grupoPaisArch").classList.add("oculto");
-    $("grupoUmbralArch").classList.add("oculto");
-    $("grupoOsint").classList.remove("oculto");
-    cargarProveedoresOsint();
-    $("chipEstado").textContent = "listo";
-    return;
-  }
-
   // modo validación
-  const disponible = ["mails","telefonos","denominacion","cuitificacion","cuit","comparacion"].includes(estado.proceso);
+  const disponible = ["mails","osint","telefonos","denominacion","cuitificacion","cuit","comparacion"].includes(estado.proceso);
   $("cartaOrigen").classList.toggle("oculto", !disponible);
   $("cartaFuturo").classList.toggle("oculto", disponible);
   const esCuit = estado.proceso==="cuitificacion";
@@ -782,7 +768,8 @@ function reiniciarWizard(){
     $("lblColDato").textContent = "Columna de la denominación";
   }else{
     $("lblColId").textContent = "Columna del CUIT / identificador";
-    $("lblColDato").textContent = estado.proceso==="mails" ? "Columna del mail a depurar" : "Columna del teléfono a depurar";
+    $("lblColDato").textContent = estado.proceso==="mails" ? "Columna del mail a depurar" :
+      (estado.proceso==="osint" ? "Columna del mail a consultar" : "Columna del teléfono a depurar");
   }
   // Cuitificación usa UNA sola columna: el número. La denominación NO se aporta,
   // se TRAE del padrón. Por eso se oculta el segundo desplegable.
@@ -794,7 +781,8 @@ function reiniciarWizard(){
   $("grupoTipoBusqueda").classList.toggle("oculto", !(esCuit || esValidCuit));
   $("grupoPais").classList.toggle("oculto", estado.proceso!=="telefonos");
   $("grupoPaisArch").classList.toggle("oculto", estado.proceso!=="telefonos");
-  $("grupoOsint").classList.add("oculto");
+  $("grupoOsint").classList.toggle("oculto", estado.proceso!=="osint");
+  if(estado.proceso==="osint") cargarProveedoresOsint();
   // El umbral aplica a denominación Y a validación de CUIT (compara nombres).
   const usaUmbral = estado.proceso==="denominacion" || esValidCuit;
   $("grupoUmbral").classList.toggle("oculto", !usaUmbral);
@@ -813,6 +801,11 @@ function elegirOrigen(o){
   $("cartaSeleccion").classList.add("oculto");
   $("cartaGeneracion").classList.add("oculto");
   $("cartaProgreso").classList.add("oculto");
+  if(estado.proceso==="osint"){
+    const destino = o==="db" ? $("cartaGeneracion") : $("cartaArchivo");
+    destino.insertBefore($("grupoOsint"), destino.querySelector(".fila-botones"));
+    $("grupoOsint").classList.remove("oculto");
+  }
 }
 $("opDB").onclick = ()=>elegirOrigen("db");
 $("opArchivo").onclick = ()=>elegirOrigen("archivo");
@@ -1062,13 +1055,19 @@ function umbralElegido(idInput){
 
 async function iniciarProcesoDB(){
   estado.esArchivo = false;
+  const proveedores = [...document.querySelectorAll('input[name="proveedorOsint"]:checked')]
+    .map(el=>el.value);
+  if(estado.proceso==="osint" && proveedores.length===0){
+    alert("Elegí al menos un proveedor OSINT.");
+    return;
+  }
   const r = await fetch("/api/procesos/db",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({session_id:estado.session, proceso:estado.proceso,
       esquema:$("selEsquema").value, tabla:$("selTabla").value,
       col_id:$("selColId").value, col_dato:$("selColDato").value,
       tipo_busqueda:$("selTipoBusqueda").value,
       usuario:estado.usuario, cliente:$("fCliente").value, pais:$("selPais").value,
-      umbral:umbralElegido("fUmbral")})});
+      umbral:umbralElegido("fUmbral"), proveedores_osint:proveedores})});
   const j = await r.json();
   if(!r.ok){ alert(j.detail||"Error al iniciar el proceso"); return; }
   arrancarSeguimiento(j.job_id);

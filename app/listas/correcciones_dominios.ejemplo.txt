@@ -1,7 +1,6 @@
 # Correcciones de dominios mal escritos.
 # Formato:  incorrecto = correcto
 # Ejemplo:  gmial.com = gmail.com
-# (las lineas que empiezan con # son comentarios)
 
 adienet.com.uy = adinet.com.uy
 adient.com.uy = adinet.com.uy

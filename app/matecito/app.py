@@ -26,7 +26,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # --- lógica de validación ---
 from matecito.validadores.telefonos import (validar_telefono, fila_resultado,
@@ -659,6 +659,17 @@ def _tipos_columnas(db_type, proceso):
             ("MOTIVO_BAJA", "VARCHAR2(300)", "VARCHAR(300)"),
             ("FECHA_PROCESO", "DATE", "DATETIME"),
         ]
+    elif proceso == "osint":
+        cols = [
+            ("ID_ORIGEN", "VARCHAR2(80)", "VARCHAR(80)"),
+            ("MAIL", "VARCHAR2(300)", "VARCHAR(300)"),
+            ("PROVEEDOR", "VARCHAR2(100)", "VARCHAR(100)"),
+            ("CATEGORIA_OSINT", "VARCHAR2(100)", "VARCHAR(100)"),
+            ("ESTADO_OSINT", "VARCHAR2(60)", "VARCHAR(60)"),
+            ("URL_OSINT", "VARCHAR2(1000)", "VARCHAR(1000)"),
+            ("DETALLE_OSINT", "VARCHAR2(2000)", "VARCHAR(2000)"),
+            ("DATOS_OSINT", "CLOB", "TEXT"),
+        ]
     else:  # mails
         cols = [
             ("ID_ORIGEN", "VARCHAR2(80)", "VARCHAR(80)"),
@@ -1043,6 +1054,31 @@ def _job_procesar_db(job, cx, params):
                 resultados.append(fila_resultado(id_val, res))
                 if i % 5000 == 0:
                     job.escribir(f"  …{i}/{len(rows)} validados")
+        elif proceso == "osint":
+            proveedores = params.get("proveedores_osint") or []
+            entradas = [(id_val, str(dato or "").strip()) for id_val, dato in rows]
+            validos = list(dict.fromkeys(
+                email for _, email in entradas if osint_email.email_valido(email)
+            ))
+            job.escribir(
+                f"Consultando OSINT para {len(validos)} mails válidos en "
+                f"{len(proveedores)} proveedores…"
+            )
+            por_mail = {}
+            for hallazgo in osint_email.scan_many(validos, proveedores):
+                por_mail.setdefault(hallazgo["MAIL"], []).append(hallazgo)
+            for id_val, email in entradas:
+                hallazgos = por_mail.get(email, [])
+                if hallazgos:
+                    resultados.extend({"ID_ORIGEN": id_val, **h} for h in hallazgos)
+                else:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "MAIL INVALIDO", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Sintaxis de email inválida",
+                        "DATOS_OSINT": "{}",
+                    })
         else:
             if EmailAgent is None:
                 raise RuntimeError(f"No se pudo importar el agente de mails: {EMAIL_AGENT_ERR}")
@@ -1530,6 +1566,7 @@ class ProcesoDBRequest(BaseModel):
     cliente: str = ""
     pais: str = "AR"
     umbral: float = UMBRAL_COINCIDENTE_DEFAULT   # denominación y validación de CUIT (0-100)
+    proveedores_osint: list[str] = Field(default_factory=list)
 
 
 class NormalizacionDBRequest(BaseModel):
@@ -1661,7 +1698,19 @@ def procesar_db(req: ProcesoDBRequest):
     if not proceso_valido(req.proceso):
         raise HTTPException(400, "Proceso no disponible todavía.")
     if req.proceso == "osint":
-        raise HTTPException(400, "OSINT se procesa mediante un archivo CSV o Excel.")
+        if not req.col_dato:
+            raise HTTPException(400, "Elegí la columna que contiene el mail.")
+        if not req.proveedores_osint:
+            raise HTTPException(400, "Elegí al menos un proveedor OSINT.")
+        try:
+            disponibles = {p["id"] for p in osint_email.proveedores_disponibles()}
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        desconocidos = sorted(set(req.proveedores_osint) - disponibles)
+        if desconocidos:
+            raise HTTPException(
+                400, f"Proveedores OSINT no disponibles: {', '.join(desconocidos)}"
+            )
     if req.proceso == "cuit" and not (req.col_id and req.col_dato):
         raise HTTPException(400, "Elegí la columna del CUIT/DNI y la de la denominación.")
     if req.proceso == "cuit" and not (0 <= req.umbral <= 100):

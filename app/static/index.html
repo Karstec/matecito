@@ -164,6 +164,9 @@
   .chk input{width:auto; margin:0;}
   .chk.sel{border-color:var(--verde); background:var(--verde-claro); color:var(--verde-osc); font-weight:700;}
   .osint-barra{display:flex; gap:8px; align-items:end; flex-wrap:wrap; margin-top:12px;}
+  .osint-limite{display:flex; gap:14px; align-items:end; flex-wrap:wrap; margin-top:12px;}
+  .osint-limite input{width:185px;}
+  .osint-limite .aviso{margin:0; max-width:550px;}
   .osint-busqueda{flex:1; min-width:240px;}
   .osint-lista{max-height:310px; overflow-y:auto; border:1.5px solid #d8dcd8;
     border-radius:8px; padding:10px; margin-top:10px; background:#fafbfa;
@@ -422,6 +425,15 @@
             La consulta se ejecutará únicamente contra los proveedores seleccionados.
             Sólo se ofrecen consultas silenciosas que no deberían avisar al titular.
           </div>
+          <div class="osint-limite">
+            <div>
+              <label for="limiteInteraccionesOsint">Máximo de interacciones con proveedores</label>
+              <input id="limiteInteraccionesOsint" type="number" min="1" max="20000" step="1" value="20000">
+            </div>
+            <div id="avisoLimiteOsint" class="aviso aviso-verde">
+              Tope seguro: 20.000 interacciones por ejecución.
+            </div>
+          </div>
           <div class="osint-barra">
             <div class="osint-busqueda">
               <label for="buscarProveedorOsint">Buscar por proveedor o categoría</label>
@@ -531,6 +543,29 @@ const $ = id => document.getElementById(id);
 let estado = { modo:"validacion", proceso:"mails", origen:null, session:null,
   usuario:"", pollTimer:null, jobId:null, esArchivo:false, columnasN:[] };
 let proveedoresOsintCargados = false;
+const LIMITE_INTERACCIONES_OSINT = 20000;
+
+function limiteInteraccionesOsint(){
+  const valor = parseInt($("limiteInteraccionesOsint").value, 10);
+  return Number.isInteger(valor) ? valor : LIMITE_INTERACCIONES_OSINT;
+}
+
+function actualizarLimiteOsint(){
+  const limite = limiteInteraccionesOsint();
+  const proveedores = document.querySelectorAll('input[name="proveedorOsint"]:checked').length;
+  const aviso = $("avisoLimiteOsint");
+  if(limite < 1 || limite > LIMITE_INTERACCIONES_OSINT){
+    aviso.className = "aviso aviso-rojo";
+    aviso.textContent = `El máximo permitido es ${LIMITE_INTERACCIONES_OSINT.toLocaleString("es-AR")} interacciones por ejecución.`;
+    return false;
+  }
+  const correos = proveedores ? Math.floor(limite / proveedores) : 0;
+  aviso.className = "aviso aviso-verde";
+  aviso.textContent = proveedores
+    ? `Con ${proveedores} proveedor${proveedores===1 ? "" : "es"}, se consultarán hasta ${correos.toLocaleString("es-AR")} mails únicos (${limite.toLocaleString("es-AR")} interacciones como máximo).`
+    : `Tope seguro: ${limite.toLocaleString("es-AR")} interacciones por ejecución. Elegí proveedores para calcular los mails posibles.`;
+  return true;
+}
 
 function actualizarSeleccionOsint(){
   const checks = [...document.querySelectorAll('input[name="proveedorOsint"]')];
@@ -538,6 +573,7 @@ function actualizarSeleccionOsint(){
   const cantidad = checks.filter(c=>c.checked).length;
   $("contadorProveedoresOsint").textContent =
     `${cantidad} seleccionado${cantidad===1 ? "" : "s"}`;
+  actualizarLimiteOsint();
 }
 
 function filtrarProveedoresOsint(){
@@ -570,6 +606,7 @@ async function cargarProveedoresOsint(){
 }
 
 $("buscarProveedorOsint").oninput = filtrarProveedoresOsint;
+$("limiteInteraccionesOsint").oninput = actualizarLimiteOsint;
 $("btnSeleccionarVisibles").onclick = ()=>{
   document.querySelectorAll("#proveedoresOsint label:not(.oculto) input").forEach(
     check=>check.checked = true
@@ -1061,13 +1098,18 @@ async function iniciarProcesoDB(){
     alert("Elegí al menos un proveedor OSINT.");
     return;
   }
+  if(estado.proceso==="osint" && !actualizarLimiteOsint()){
+    alert(`El máximo permitido es ${LIMITE_INTERACCIONES_OSINT.toLocaleString("es-AR")} interacciones OSINT por ejecución.`);
+    return;
+  }
   const r = await fetch("/api/procesos/db",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({session_id:estado.session, proceso:estado.proceso,
       esquema:$("selEsquema").value, tabla:$("selTabla").value,
       col_id:$("selColId").value, col_dato:$("selColDato").value,
       tipo_busqueda:$("selTipoBusqueda").value,
       usuario:estado.usuario, cliente:$("fCliente").value, pais:$("selPais").value,
-      umbral:umbralElegido("fUmbral"), proveedores_osint:proveedores})});
+      umbral:umbralElegido("fUmbral"), proveedores_osint:proveedores,
+      limite_interacciones_osint:limiteInteraccionesOsint()})});
   const j = await r.json();
   if(!r.ok){ alert(j.detail||"Error al iniciar el proceso"); return; }
   arrancarSeguimiento(j.job_id);
@@ -1089,7 +1131,12 @@ $("btnIniciarArchivo").onclick = async ()=>{
     alert("Elegí al menos un proveedor OSINT.");
     return;
   }
+  if(estado.proceso==="osint" && !actualizarLimiteOsint()){
+    alert(`El máximo permitido es ${LIMITE_INTERACCIONES_OSINT.toLocaleString("es-AR")} interacciones OSINT por ejecución.`);
+    return;
+  }
   fd.append("proveedores_osint", estado.proceso==="osint" ? proveedores.join(",") : "");
+  fd.append("limite_interacciones_osint", limiteInteraccionesOsint());
   fd.append("archivo", f);
   $("btnIniciarArchivo").disabled = true;
   try{

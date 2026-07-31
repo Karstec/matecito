@@ -38,3 +38,13 @@ def test_tabla_osint_tiene_columnas_para_persistir_hallazgos():
         "ESTADO_OSINT", "URL_OSINT", "DETALLE_OSINT", "DATOS_OSINT",
     ]
     assert columnas["DATOS_OSINT"] == "CLOB"
+
+
+def test_limite_osint_prorratea_emails_por_proveedor():
+    emails = [f"persona{i}@example.com" for i in range(10)]
+    consultados, max_emails = app._limitar_emails_osint(
+        emails, ["facebook", "github", "linkedin"], limite=8
+    )
+
+    assert max_emails == 2
+    assert consultados == emails[:2]

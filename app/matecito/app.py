@@ -73,6 +73,17 @@ PADRON_RUTA_SNAPSHOT = os.environ.get("MATECITO_PADRON_SNAPSHOT", "")
 # los trabajos de TODOS los usuarios conectados.
 LIMITE_BUSQUEDA_MANUAL = 200
 
+# Cada email se consulta una vez por proveedor seleccionado. Este tope evita
+# ráfagas que puedan ser interpretadas como abuso por los proveedores OSINT.
+LIMITE_INTERACCIONES_OSINT = 20_000
+
+
+def _limitar_emails_osint(emails, proveedores, limite=LIMITE_INTERACCIONES_OSINT):
+    """Devuelve los emails que entran en el presupuesto de consultas OSINT."""
+    cantidad_proveedores = max(1, len(proveedores))
+    max_emails = limite // cantidad_proveedores
+    return emails[:max_emails], max_emails
+
 
 def config_padron():
     """Config de la fuente del padron. Por defecto MODO AUTO: Python abre su
@@ -1060,17 +1071,31 @@ def _job_procesar_db(job, cx, params):
             validos = list(dict.fromkeys(
                 email for _, email in entradas if osint_email.email_valido(email)
             ))
+            limite = params.get("limite_interacciones_osint", LIMITE_INTERACCIONES_OSINT)
+            consultados, max_emails = _limitar_emails_osint(validos, proveedores, limite)
+            no_consultados = set(validos[max_emails:])
             job.escribir(
-                f"Consultando OSINT para {len(validos)} mails válidos en "
-                f"{len(proveedores)} proveedores…"
+                f"Consultando OSINT para {len(consultados)} mails válidos en "
+                f"{len(proveedores)} proveedores ({len(consultados) * len(proveedores)} "
+                f"interacciones; límite: {limite})…"
             )
+            if no_consultados:
+                job.escribir(f"⚠ Se omitieron {len(no_consultados)} mails válidos para respetar el límite de consultas.")
             por_mail = {}
-            for hallazgo in osint_email.scan_many(validos, proveedores):
+            for hallazgo in osint_email.scan_many(consultados, proveedores):
                 por_mail.setdefault(hallazgo["MAIL"], []).append(hallazgo)
             for id_val, email in entradas:
                 hallazgos = por_mail.get(email, [])
                 if hallazgos:
                     resultados.extend({"ID_ORIGEN": id_val, **h} for h in hallazgos)
+                elif email in no_consultados:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "NO CONSULTADO - LIMITE", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Se omitió para respetar el límite de interacciones OSINT",
+                        "DATOS_OSINT": "{}",
+                    })
                 else:
                     resultados.append({
                         "ID_ORIGEN": id_val, "MAIL": email,
@@ -1307,7 +1332,8 @@ def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
 def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                           nombre_original, pais, delim=",",
                           umbral=UMBRAL_COINCIDENTE_DEFAULT,
-                          tipo_busqueda="cuit", proveedores_osint=None):
+                          tipo_busqueda="cuit", proveedores_osint=None,
+                          limite_interacciones_osint=LIMITE_INTERACCIONES_OSINT):
     """Procesa un archivo plano (CSV/Excel ya leído a filas) y genera el CSV
     de salida automáticamente."""
     try:
@@ -1450,18 +1476,32 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
             validos = list(dict.fromkeys(
                 email for _, email in entradas if osint_email.email_valido(email)
             ))
+            consultados, max_emails = _limitar_emails_osint(
+                validos, proveedores_osint, limite_interacciones_osint)
+            no_consultados = set(validos[max_emails:])
             job.escribir(
-                f"Consultando OSINT para {len(validos)} mails válidos en "
-                f"{len(proveedores_osint)} proveedores…"
+                f"Consultando OSINT para {len(consultados)} mails válidos en "
+                f"{len(proveedores_osint)} proveedores ({len(consultados) * len(proveedores_osint)} "
+                f"interacciones; límite: {limite_interacciones_osint})…"
             )
+            if no_consultados:
+                job.escribir(f"⚠ Se omitieron {len(no_consultados)} mails válidos para respetar el límite de consultas.")
             por_mail = {}
-            for hallazgo in osint_email.scan_many(validos, proveedores_osint):
+            for hallazgo in osint_email.scan_many(consultados, proveedores_osint):
                 por_mail.setdefault(hallazgo["MAIL"], []).append(hallazgo)
             resultados = []
             for id_val, email in entradas:
                 hallazgos = por_mail.get(email, [])
                 if hallazgos:
                     resultados.extend({"ID_ORIGEN": id_val, **h} for h in hallazgos)
+                elif email in no_consultados:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "NO CONSULTADO - LIMITE", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Se omitió para respetar el límite de interacciones OSINT",
+                        "DATOS_OSINT": "{}",
+                    })
                 else:
                     resultados.append({
                         "ID_ORIGEN": id_val, "MAIL": email,
@@ -1567,6 +1607,8 @@ class ProcesoDBRequest(BaseModel):
     pais: str = "AR"
     umbral: float = UMBRAL_COINCIDENTE_DEFAULT   # denominación y validación de CUIT (0-100)
     proveedores_osint: list[str] = Field(default_factory=list)
+    limite_interacciones_osint: int = Field(LIMITE_INTERACCIONES_OSINT, ge=1,
+                                             le=LIMITE_INTERACCIONES_OSINT)
 
 
 class NormalizacionDBRequest(BaseModel):
@@ -1959,6 +2001,7 @@ async def procesar_archivo(request: Request,
                            umbral: float = Form(UMBRAL_COINCIDENTE_DEFAULT),
                            tipo_busqueda: str = Form("cuit"),
                            proveedores_osint: str = Form(""),
+                           limite_interacciones_osint: int = Form(LIMITE_INTERACCIONES_OSINT),
                            archivo: UploadFile = File(...)):
     # La lista de procesos válidos sale del registro PROCESOS (igual que el
     # endpoint de base de datos), no de una tupla escrita a mano.
@@ -1966,6 +2009,8 @@ async def procesar_archivo(request: Request,
         raise HTTPException(400, "Proceso no disponible todavía.")
     if proceso in ("denominacion", "cuit") and not (0 <= umbral <= 100):
         raise HTTPException(400, "El umbral de coincidencia debe estar entre 0 y 100.")
+    if proceso == "osint" and not (1 <= limite_interacciones_osint <= LIMITE_INTERACCIONES_OSINT):
+        raise HTTPException(400, f"El límite OSINT debe estar entre 1 y {LIMITE_INTERACCIONES_OSINT:,} interacciones.")
     contenido = await archivo.read()
     encabezado, filas, delim = _leer_archivo_plano(archivo.filename, contenido)
     if not filas:
@@ -1997,7 +2042,7 @@ async def procesar_archivo(request: Request,
     t = threading.Thread(target=_job_procesar_archivo,
                          args=(job, proceso, filas, encabezado, idx_id, idx_dato,
                                archivo.filename, pais, delim, umbral,
-                               tipo_busqueda, proveedores), daemon=True)
+                               tipo_busqueda, proveedores, limite_interacciones_osint), daemon=True)
     t.start()
     return {"ok": True, "job_id": job.id}
 

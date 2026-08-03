@@ -264,9 +264,7 @@
         <div class="navsub">
           <button class="navbtn" id="btnAbrirBuscador"><span class="punto"></span>CUIT / DNI puntual</button>
           <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>CUIT/DNI en lote</button>
-          <button class="navbtn" data-modo="validacion" data-proceso="denominacion"><span class="punto"></span>Denominaciones (2 columnas)</button>
-          <button class="navbtn" data-modo="validacion" data-proceso="comparacion"><span class="punto"></span>Redes · 6 algoritmos</button>
-          <button class="navbtn" id="btnAbrirCruce"><span class="punto"></span>Redes · Cruce contra base</button>
+          <button class="navbtn" id="btnAbrirCruce"><span class="punto"></span>Cruce de denominaciones</button>
         </div>
       </div>
     </nav>
@@ -566,7 +564,20 @@
     </p>
 
     <div style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
-      <b style="font-size:13px">1 · Archivo de contactos</b>
+      <b style="font-size:13px">1 · ¿De dónde salen los nombres a comparar?</b>
+      <div style="margin-top:8px; font-size:13px">
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:18px">
+          <input type="radio" name="cruceOrigen" value="archivo" checked> De un archivo (CSV / Excel)
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:6px">
+          <input type="radio" name="cruceOrigen" value="columnas"> De dos columnas de una tabla
+        </label>
+      </div>
+      <p style="font-size:12px; color:var(--mudo); margin:6px 0 0" id="cruceAyudaOrigen"></p>
+    </div>
+
+    <div id="cruceBloqueArchivo" style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
+      <b style="font-size:13px">2 · Archivo de contactos</b>
       <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
         <input type="file" id="cruceArchivo" accept=".csv,.xlsx,.xlsm,.txt" style="flex:1">
         <button class="btn btn-gris" id="btnCruceSubir">Leer columnas</button>
@@ -575,7 +586,7 @@
     </div>
 
     <div id="cruceBloqueCols" class="oculto" style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
-      <b style="font-size:13px">2 · Columnas del archivo</b>
+      <b style="font-size:13px">3 · Columnas del archivo</b>
       <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:8px">
         <label>Nombre a comparar<select id="cruceColNombre"></select></label>
         <label>Identificador de fila<select id="cruceColId"></select></label>
@@ -588,7 +599,7 @@
     </div>
 
     <div id="cruceBloqueBase" class="oculto" style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
-      <b style="font-size:13px">3 · Lado base</b>
+      <b style="font-size:13px">4 · Lado base</b>
       <div id="cruceSinConexion" style="font-size:13px; color:#c05; margin-top:8px">
         No hay conexión abierta. Conectate a una base desde la pantalla principal y volvé a abrir esta ventana.
       </div>
@@ -599,6 +610,7 @@
           <label>Columna del identificador<select id="cruceColIdBase"></select></label>
           <label>Columna del nombre<select id="cruceColNombreBase"></select></label>
           <label>Documento (DNI / RUT / CUIT)<select id="cruceColDoc"></select></label>
+          <label id="lblColNombre2" class="oculto">Segunda columna de nombre<select id="cruceColNombreBase2"></select></label>
           <label>Candidatos por fila<input type="number" id="cruceCandidatos" value="5" min="1" max="20"></label>
         </div>
         <label style="display:block; margin-top:10px">Filtro opcional (WHERE)
@@ -1205,6 +1217,34 @@ function elegirPorNombre(sel, candidatos){
   }
 }
 
+const AYUDA_ORIGEN = {
+  archivo: "El archivo trae USERNAME, NOMBRE, TELEFONO y EMAIL. Se compara el nombre contra la columna de nombre de la base y se buscan candidatos; el contacto se arrastra sin comparar.",
+  columnas: "Las dos columnas ya están enfrentadas en la misma fila, así que no hay búsqueda: se compara 1 a 1 y sale una fila por fila.",
+};
+
+function cruceOrigenActual(){
+  const r = document.querySelector("input[name=cruceOrigen]:checked");
+  return r ? r.value : "archivo";
+}
+
+function aplicarOrigenCruce(){
+  const modo = cruceOrigenActual();
+  const esArchivo = modo === "archivo";
+  $("cruceAyudaOrigen").textContent = AYUDA_ORIGEN[modo];
+  $("cruceBloqueArchivo").classList.toggle("oculto", !esArchivo);
+  $("cruceBloqueCols").classList.toggle("oculto", !esArchivo || !cruce.token);
+  $("lblColNombre2").classList.toggle("oculto", esArchivo);
+  // En modo 2 columnas el documento y los candidatos no aplican: no hay
+  // busqueda, la correspondencia ya viene dada por la fila.
+  $("cruceColDoc").closest("label").classList.toggle("oculto", !esArchivo);
+  $("cruceCandidatos").closest("label").classList.toggle("oculto", !esArchivo);
+  if(!esArchivo) $("cruceBloqueBase").classList.remove("oculto");
+  revisarCruceListo();
+}
+
+document.querySelectorAll("input[name=cruceOrigen]").forEach(
+  el => el.addEventListener("change", aplicarOrigenCruce));
+
 $("btnAbrirCruce").onclick = ()=>{
   $("veloCruce").classList.remove("oculto");
   $("cruceAviso").textContent = "";
@@ -1212,6 +1252,7 @@ $("btnAbrirCruce").onclick = ()=>{
   $("cruceSinConexion").classList.toggle("oculto", hay);
   $("cruceConConexion").classList.toggle("oculto", !hay);
   if(hay) cargarEsquemasCruce();
+  aplicarOrigenCruce();
 };
 $("btnCerrarCruce").onclick = ()=>$("veloCruce").classList.add("oculto");
 
@@ -1278,6 +1319,7 @@ async function cargarColumnasCruce(){
   opciones("cruceColIdBase", cols, false);
   opciones("cruceColNombreBase", cols, false);
   opciones("cruceColDoc", cols, true);
+  opciones("cruceColNombreBase2", cols, false);
   elegirPorNombre("cruceColIdBase", ["CONCOD","ID","COD"]);
   elegirPorNombre("cruceColNombreBase", ["NOMCOMPLETO","NOMBRE","DENOMIN"]);
   elegirPorNombre("cruceColDoc", ["DOC","DNI","RUT","CUIT","CI"]);
@@ -1288,14 +1330,19 @@ $("cruceEsquema").onchange = cargarTablasCruce;
 $("cruceTabla").onchange = cargarColumnasCruce;
 
 function revisarCruceListo(){
-  const ok = !!cruce.token && !!estado.session &&
-             !!$("cruceTabla").value && !!$("cruceColNombreBase").value;
+  const modo = cruceOrigenActual();
+  const base = !!estado.session && !!$("cruceTabla").value &&
+               !!$("cruceColNombreBase").value;
+  const ok = modo === "archivo"
+    ? base && !!cruce.token
+    : base && !!$("cruceColNombreBase2").value &&
+      $("cruceColNombreBase2").value !== $("cruceColNombreBase").value;
   $("btnCruceEjecutar").disabled = !ok;
 }
 
 $("btnCruceEjecutar").onclick = async ()=>{
   const idBase = $("cruceColIdBase").value, nomBase = $("cruceColNombreBase").value;
-  if(idBase === nomBase){
+  if(cruceOrigenActual() === "archivo" && idBase === nomBase){
     $("cruceAviso").innerHTML = "<span style='color:#c05'>El identificador y el nombre no pueden ser la misma columna.</span>";
     return;
   }
@@ -1306,6 +1353,8 @@ $("btnCruceEjecutar").onclick = async ()=>{
   fd.append("tabla_base", $("cruceTabla").value);
   fd.append("col_id_base", idBase);
   fd.append("col_denom_base", nomBase);
+  fd.append("origen", cruceOrigenActual());
+  fd.append("col_denom_base_2", $("cruceColNombreBase2").value || "");
   fd.append("col_doc_base", $("cruceColDoc").value);
   fd.append("col_denom_archivo", $("cruceColNombre").value);
   fd.append("col_id_archivo", $("cruceColId").value);

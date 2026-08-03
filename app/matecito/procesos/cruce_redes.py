@@ -188,6 +188,66 @@ class _JobLog:
         self.escribir = log
 
 
+def _filas_desde_columnas(cx, tabla, col_a, col_b, where, columnas_extra,
+                          stats, log):
+    """
+    Modo 1:1 — dos columnas de la MISMA tabla, ya enfrentadas fila por fila.
+
+    Acá NO hay búsqueda ni ranking: la correspondencia ya viene dada por la
+    fila. Cada fila de entrada produce exactamente una de salida, con
+    RANKING=1 siempre. Por eso este modo no arma índice invertido: no hay
+    nada que buscar, y el blocking sobre un problema 1:1 es puro costo.
+
+    Es el caso que antes atendían los procesos 'denominacion' y
+    'comparacion' por separado. La única diferencia entre aquellos dos era
+    el formato de salida —uno daba un porcentaje y un veredicto, el otro las
+    6 métricas—, y esa diferencia desaparece acá porque la tabla resultante
+    trae las dos cosas: las 6 métricas Y el COINCIDE.
+    """
+    for ident, que in ((tabla, 'tabla'), (col_a, 'columna'), (col_b, 'columna')):
+        validar_identificador(ident, que)
+    filtro = f" WHERE {where}" if where else ''
+    filas = cx.fetchall(f"SELECT {col_a}, {col_b} FROM {tabla}{filtro}")
+    log(f"Comparación 1:1 sobre {tabla}: {len(filas)} filas.")
+    stats['filas_archivo'] = len(filas)
+    stats['filas_base'] = len(filas)
+
+    momento = datetime.now()
+    for i, (a, b) in enumerate(filas, start=1):
+        na = normalizar(a)
+        nb = normalizar(b)
+        base = {
+            'ID_ARCHIVO': str(i),
+            'DENOM_ARCHIVO': na['DENOMINACION'],
+            'CLAVE_ARCHIVO': na['CLAVE'],
+            'COLUMNA_USADA': col_a,
+            'ID_BASE': str(i),
+            'DOC_BASE': None,
+            'DENOM_BASE': nb['DENOMINACION'],
+            'CLAVE_BASE': nb['CLAVE'],
+            'RANKING': 1,
+            'FECHA_PROCESO': momento,
+        }
+        for c in columnas_extra:
+            base[c] = None
+        if na['TIPO'] == 'RUIDO':
+            stats['ruido'] += 1
+        elif na['TIPO'] == 'J':
+            stats['juridicas'] += 1
+
+        if not na['CLAVE'] or not nb['CLAVE']:
+            stats['NO'] += 1
+            yield {**base, 'MOTIVO': na['MOTIVO_NORM'] or 'DENOMINACION_VACIA',
+                   'COINCIDE': 'NO'}
+            continue
+
+        r = comparar(na['DENOMINACION'], nb['DENOMINACION'])
+        stats['pares'] += 1
+        veredicto = r.get('COINCIDE')
+        stats[veredicto if veredicto in ('SI', 'RE', 'NO') else 'NO'] += 1
+        yield {**base, **r}
+
+
 def correr(cx, config, job=None, log=print):
     """
     Entrada única. `config` trae lo que la pantalla pidió:
@@ -208,7 +268,11 @@ def correr(cx, config, job=None, log=print):
     """
     col_denom_archivo = config.get('col_denom_archivo', 'NOMBRE')
     respaldos = tuple(config.get('respaldos_archivo', ('USERNAME',)))
-    columnas_extra = tuple(config.get('columnas_extra', ('TELEFONO', 'EMAIL')))
+    # USERNAME se arrastra Y sirve de respaldo del nombre: en los exports de
+    # redes es lo único que identifica el perfil cuando NOMBRE viene vacío,
+    # y conflictos.py lo usa para detectar el mismo perfil repetido.
+    columnas_extra = tuple(config.get('columnas_extra',
+                                      ('USERNAME', 'TELEFONO', 'EMAIL')))
     col_id_archivo = config.get('col_id_archivo', 'N')
     candidatos_por_fila = int(config.get('candidatos_por_fila',
                                          CANDIDATOS_POR_FILA))
@@ -218,26 +282,35 @@ def correr(cx, config, job=None, log=print):
     if esquema and '.' not in tabla_base:
         tabla_base = f"{esquema}.{tabla_base}"
 
-    _, filas_archivo = leer_contactos(config['ruta_archivo'],
-                                      col_denom_archivo)
-    log(f"Archivo: {len(filas_archivo)} filas.")
+    origen = config.get('origen', 'archivo')
 
-    indice, docs = indexar_base(
-        cx, tabla_base, config['col_id_base'], config['col_denom_base'],
-        config.get('col_doc_base'), config.get('where_base'), log)
-
-    if indice.total == 0:
+    filas_archivo, indice, docs = [], None, {}
+    if origen == 'archivo':
+        _, filas_archivo = leer_contactos(config['ruta_archivo'],
+                                          col_denom_archivo)
+        log(f"Archivo: {len(filas_archivo)} filas.")
+        indice, docs = indexar_base(
+            cx, tabla_base, config['col_id_base'], config['col_denom_base'],
+            config.get('col_doc_base'), config.get('where_base'), log)
+        if indice.total == 0:
+            raise RuntimeError(
+                f"La columna {config['col_denom_base']} de {tabla_base} no "
+                f"devolvió ningún nombre. Revisá la selección con la "
+                f"previsualización antes de volver a correr.")
+    elif not config.get('col_denom_base_2'):
         raise RuntimeError(
-            f"La columna {config['col_denom_base']} de {tabla_base} no "
-            f"devolvió ningún nombre. Revisá la selección con la "
-            f"previsualización antes de volver a correr.")
+            "El modo de dos columnas necesita la segunda columna de "
+            "denominación (col_denom_base_2).")
 
     tabla = nombre_tabla_resultante(config.get('usuario', 'MATECITO'),
                                     config.get('cliente', 'CRUCE'))
     cols_def = dialecto.columnas_cruce(cx.db_type, columnas_extra)
     nombres = [n for n, _ in cols_def]  # orden del INSERT
 
-    stats = {'filas_archivo': len(filas_archivo), 'filas_base': indice.total,
+    # En modo 'columnas' no hay índice ni archivo: _filas_desde_columnas
+    # completa estos dos contadores cuando lee la tabla.
+    stats = {'filas_archivo': len(filas_archivo),
+             'filas_base': indice.total if indice else 0,
              'pares': 0, 'SI': 0, 'RE': 0, 'NO': 0,
              'sin_candidatos': 0, 'ruido': 0, 'juridicas': 0, 'insertadas': 0}
 
@@ -245,11 +318,18 @@ def correr(cx, config, job=None, log=print):
     escritor.crear_tabla()
     log(f"Tabla resultante: {tabla} ({cx.db_type}).")
 
+    if origen == 'columnas':
+        generador = _filas_desde_columnas(
+            cx, tabla_base, config['col_denom_base'],
+            config['col_denom_base_2'], config.get('where_base'),
+            columnas_extra, stats, log)
+    else:
+        generador = _filas_resultado(
+            filas_archivo, indice, docs, col_denom_archivo, respaldos,
+            columnas_extra, col_id_archivo, candidatos_por_fila, stats, log)
+
     lote = []
-    for fila in _filas_resultado(filas_archivo, indice, docs,
-                                 col_denom_archivo, respaldos, columnas_extra,
-                                 col_id_archivo, candidatos_por_fila,
-                                 stats, log):
+    for fila in generador:
         lote.append(fila)
         if len(lote) >= LOTE_INSERT:
             escritor.insertar(lote)

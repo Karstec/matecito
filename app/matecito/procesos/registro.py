@@ -52,11 +52,13 @@ PROCESOS = {
         "categoria": "busqueda",
         "cols_origen": 2, "padron": False, "umbral": True,
         "etiqueta": "Comparación de denominaciones (2 columnas)",
+            "oculto": True,   # unificado en cruce_redes
     },
     "comparacion": {
         "categoria": "busqueda",
         "cols_origen": 2, "padron": False, "umbral": False,
         "etiqueta": "REDES SOCIALES · Comparación de algoritmos",
+            "oculto": True,   # unificado en cruce_redes
     },
     # Origen ARCHIVO en vez de columnas de una tabla: por eso cols_origen=0.
     # La pantalla pide el csv/xlsx primero y recién después las credenciales
@@ -76,7 +78,7 @@ PROCESOS = {
         "categoria": "busqueda",
         "cols_origen": 0, "padron": False, "umbral": True,
         "origen": "archivo", "destino": "tabla",
-        "etiqueta": "REDES SOCIALES · Cruce de nombres contra la base",
+        "etiqueta": "Cruce de denominaciones (archivo o 2 columnas)",
     },
 }
 
@@ -108,10 +110,18 @@ CATEGORIAS = [
 ]
 
 
-def procesos_de(categoria):
-    """[(clave, etiqueta)] de una categoría, en el orden del registro."""
+def procesos_de(categoria, incluir_ocultos=False):
+    """
+    [(clave, etiqueta)] de una categoría, en el orden del registro.
+
+    Los marcados "oculto" no se muestran en el menú pero SIGUEN despachando:
+    son procesos que quedaron unificados en otro y se dejan vivos para no
+    romper corridas o llamadas existentes. Se pueden ver con
+    incluir_ocultos=True.
+    """
     return [(k, v["etiqueta"]) for k, v in PROCESOS.items()
-            if v.get("categoria") == categoria]
+            if v.get("categoria") == categoria
+            and (incluir_ocultos or not v.get("oculto"))]
 
 
 def categoria_de(nombre):

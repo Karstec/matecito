@@ -99,7 +99,9 @@ def montar(app, ctx):
                 "columnas": encabezados, "filas": len(filas)}
 
     @router.post("/api/cruce-redes/ejecutar")
-    def ejecutar(session_id: str = Form(...), token: str = Form(...),
+    def ejecutar(session_id: str = Form(...), token: str = Form(""),
+                 origen: str = Form("archivo"),
+                 col_denom_base_2: str = Form(""),
                  esquema: str = Form(""), tabla_base: str = Form(...),
                  col_id_base: str = Form(...), col_denom_base: str = Form(...),
                  col_doc_base: str = Form(""),
@@ -114,16 +116,27 @@ def montar(app, ctx):
         if not cx:
             raise HTTPException(
                 404, "Sesión de conexión no encontrada; conectá de nuevo.")
-        if not os.path.isfile(token):
+        if origen not in ("archivo", "columnas"):
+            raise HTTPException(400, "Origen inválido: usá 'archivo' o 'columnas'.")
+        if origen == "archivo" and not os.path.isfile(token):
             raise HTTPException(
                 400, "El archivo subido ya no está disponible. Subilo de nuevo.")
+        if origen == "columnas":
+            if not col_denom_base_2:
+                raise HTTPException(
+                    400, "Elegí la segunda columna de denominación a comparar.")
+            if col_denom_base_2 == col_denom_base:
+                raise HTTPException(
+                    400, "Las dos columnas a comparar no pueden ser la misma.")
         if not 1 <= candidatos_por_fila <= 20:
             raise HTTPException(
                 400, "Los candidatos por fila deben estar entre 1 y 20.")
 
         extra = [c for c in (col_telefono, col_mail) if c]
         config = {
+            'origen': origen,
             'ruta_archivo': token,
+            'col_denom_base_2': col_denom_base_2 or None,
             'col_denom_archivo': col_denom_archivo,
             'col_id_archivo': col_id_archivo,
             'columnas_extra': tuple(extra),
@@ -163,10 +176,11 @@ def montar(app, ctx):
                 job.finalizar(estado)
                 # El temporal se borra pase lo que pase: contiene datos
                 # personales y no tiene por qué sobrevivir a la corrida.
-                try:
-                    os.unlink(token)
-                except OSError:
-                    pass
+                if origen == "archivo":
+                    try:
+                        os.unlink(token)
+                    except OSError:
+                        pass
 
         threading.Thread(target=correr, daemon=True).start()
         return {"ok": True, "job_id": job.id}

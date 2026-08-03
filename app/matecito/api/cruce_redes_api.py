@@ -47,14 +47,31 @@ def montar(app, ctx):
     Job = ctx['job_clase']
 
     @router.get("/api/cruce-redes/columnas-archivo")
-    def columnas_archivo(ruta: str):
-        """Encabezados detectados de un archivo ya subido (por token)."""
+    def columnas_archivo(ruta: str, limite: int = 10):
+        """
+        Encabezados y primeras filas de un archivo ya subido.
+
+        La muestra existe para el mismo motivo que la del lado base: confirmar
+        que la columna elegida trae nombres y no usernames, iniciales o basura,
+        ANTES de correr el cruce y no después.
+        """
         from ..validadores.denominaciones.normalizador import leer_contactos
+        if not os.path.isfile(ruta):
+            raise HTTPException(400, "El archivo ya no está disponible.")
         try:
             encabezados, filas = leer_contactos(ruta, 'NOMBRE')
         except Exception as e:
             raise HTTPException(400, f"No se pudo leer el archivo: {e}")
-        return {"columnas": encabezados, "filas": len(filas)}
+
+        def celda(v):
+            if v is None:
+                return None
+            t = str(v).replace("\n", " ").strip()
+            return t if len(t) <= 60 else t[:59] + "…"
+
+        muestra = [[celda(f.get(c)) for c in encabezados]
+                   for f in filas[:max(1, min(limite, 50))]]
+        return {"columnas": encabezados, "filas": len(filas), "muestra": muestra}
 
     @router.post("/api/cruce-redes/subir")
     async def subir(archivo: UploadFile = File(...)):
@@ -107,6 +124,7 @@ def montar(app, ctx):
                  col_doc_base: str = Form(""),
                  col_denom_archivo: str = Form("NOMBRE"),
                  col_id_archivo: str = Form("N"),
+                 col_usuario: str = Form(""),
                  col_telefono: str = Form(""), col_mail: str = Form(""),
                  where_base: str = Form(""),
                  candidatos_por_fila: int = Form(5),
@@ -132,7 +150,9 @@ def montar(app, ctx):
             raise HTTPException(
                 400, "Los candidatos por fila deben estar entre 1 y 20.")
 
-        extra = [c for c in (col_telefono, col_mail) if c]
+        # El orden importa: es el orden de las columnas en la tabla
+        # resultante. Usuario primero porque identifica el perfil de origen.
+        extra = [c for c in (col_usuario, col_telefono, col_mail) if c]
         config = {
             'origen': origen,
             'ruta_archivo': token,

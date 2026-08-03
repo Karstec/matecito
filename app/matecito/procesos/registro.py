@@ -24,37 +24,62 @@ CAMPOS
 
 PROCESOS = {
     "osint": {
+        "categoria": "validacion",
         "cols_origen": 1, "padron": False, "umbral": False,
         "etiqueta": "OSINT de mails",
     },
     "mails": {
+        "categoria": "validacion",
         "cols_origen": 1, "padron": False, "umbral": False,
         "etiqueta": "Validación de mails",
     },
     "telefonos": {
+        "categoria": "validacion",
         "cols_origen": 1, "padron": False, "umbral": False,
         "etiqueta": "Validación de teléfonos",
     },
     "cuitificacion": {
+        "categoria": "busqueda",
         "cols_origen": 1, "padron": True, "umbral": False,
         "etiqueta": "Cuitificación",
     },
     "cuit": {
         "cols_origen": 2, "padron": True, "umbral": True,
-        "etiqueta": "Validación de denominación",
+        "categoria": "validacion",
+        "etiqueta": "Denominación contra CUIT (BCRA)",
     },
     "denominacion": {
+        "categoria": "busqueda",
         "cols_origen": 2, "padron": False, "umbral": True,
         "etiqueta": "Comparación de denominaciones (2 columnas)",
     },
     "comparacion": {
+        "categoria": "busqueda",
         "cols_origen": 2, "padron": False, "umbral": False,
         "etiqueta": "REDES SOCIALES · Comparación de algoritmos",
     },
     # Origen ARCHIVO en vez de columnas de una tabla: por eso cols_origen=0.
     # La pantalla pide el csv/xlsx primero y recién después las credenciales
     # y la selección esquema -> tabla -> columna del lado base.
+    # --- DEPURACION: transforma, no juzga. Ninguno da de baja nada. ---
+    "dep_mails": {
+        "cols_origen": 1, "padron": False, "umbral": False,
+        "categoria": "depuracion",
+        "etiqueta": "Depurar mails (acentos, typos, arroba)",
+    },
+    "dep_telefonos": {
+        "cols_origen": 1, "padron": False, "umbral": False,
+        "categoria": "depuracion",
+        "etiqueta": "Depurar teléfonos (símbolos, prefijo, +54)",
+    },
+    # --- BUSQUEDA: consulta el padrón, no modifica la tabla origen. ---
+    "busqueda_cuits": {
+        "cols_origen": 1, "padron": True, "umbral": False,
+        "categoria": "busqueda",
+        "etiqueta": "Buscar CUITs en el padrón BCRA",
+    },
     "cruce_redes": {
+        "categoria": "busqueda",
         "cols_origen": 0, "padron": False, "umbral": True,
         "origen": "archivo", "destino": "tabla",
         "etiqueta": "REDES SOCIALES · Cruce de nombres contra la base",
@@ -76,3 +101,24 @@ def proceso_necesita_dos_columnas(nombre):
 
 def etiqueta(nombre):
     return PROCESOS.get(nombre, {}).get("etiqueta", nombre)
+
+
+# Orden en que las categorías se muestran en pantalla. Es el orden del
+# trabajo real: primero se normaliza el archivo, después se depura el dato,
+# después se lo juzga, y la búsqueda es consulta pura que no modifica nada.
+CATEGORIAS = [
+    ("normalizacion", "Normalización"),
+    ("depuracion",    "Depuración"),
+    ("validacion",    "Validación"),
+    ("busqueda",      "Búsqueda"),
+]
+
+
+def procesos_de(categoria):
+    """[(clave, etiqueta)] de una categoría, en el orden del registro."""
+    return [(k, v["etiqueta"]) for k, v in PROCESOS.items()
+            if v.get("categoria") == categoria]
+
+
+def categoria_de(nombre):
+    return PROCESOS.get(nombre, {}).get("categoria")

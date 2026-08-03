@@ -205,43 +205,48 @@
       <div class="rol" id="rolInicio" title="Ir al inicio">Agente MATEcito</div>
     </div>
     <nav>
-      <div class="navgrupo" data-grupo="normalizacion">
+      <!-- Cuatro categorías, en el orden del trabajo real: normalizar el
+           archivo, depurar el dato, juzgarlo, y consultar sin modificar. -->
+      <div class="navgrupo abierto" data-grupo="normalizacion">
         <button class="navcab" data-grupo="normalizacion">
-          <span class="flecha">▸</span>Normalización
+          <span class="flecha">&#9662;</span>Normalización
         </button>
         <div class="navsub">
-          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_telefonos"><span class="punto"></span>Teléfonos</button>
-          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_mails"><span class="punto"></span>Mails</button>
+          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_telefonos"><span class="punto"></span>Teléfonos (split por |)</button>
+          <button class="navbtn" data-modo="normalizacion" data-proceso="norm_mails"><span class="punto"></span>Mails (split por |)</button>
           <button class="navbtn" data-modo="normalizacion" data-proceso="norm_ambos"><span class="punto"></span>Teléfonos y mails</button>
+        </div>
+      </div>
+      <div class="navgrupo abierto" data-grupo="depuracion">
+        <button class="navcab" data-grupo="depuracion">
+          <span class="flecha">&#9662;</span>Depuración
+        </button>
+        <div class="navsub">
+          <button class="navbtn" data-modo="validacion" data-proceso="dep_mails"><span class="punto"></span>Mails</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="dep_telefonos"><span class="punto"></span>Teléfonos</button>
         </div>
       </div>
       <div class="navgrupo abierto" data-grupo="validacion">
         <button class="navcab" data-grupo="validacion">
-          <span class="flecha">▾</span>Validación y depuración
+          <span class="flecha">&#9662;</span>Validación
         </button>
         <div class="navsub">
-          <button class="navbtn activo" data-modo="validacion" data-proceso="mails"><span class="punto"></span>Mails</button>
-          <button class="navbtn" data-modo="validacion" data-proceso="osint"><span class="punto"></span>OSINT</button>
+          <button class="navbtn activo" data-modo="validacion" data-proceso="osint"><span class="punto"></span>Mails (OSINT)</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="mails"><span class="punto"></span>Mails (reglas)</button>
           <button class="navbtn" data-modo="validacion" data-proceso="telefonos"><span class="punto"></span>Teléfonos</button>
-          <button class="navbtn" data-modo="validacion" data-proceso="cuit"><span class="punto"></span>Validar denominación</button>
-          <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>Cuitificar</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="cuit"><span class="punto"></span>Denominación vs CUIT</button>
         </div>
       </div>
-      <div class="navgrupo abierto" data-grupo="redes">
-        <button class="navcab" data-grupo="redes">
-          <span class="flecha">&#9662;</span>Redes sociales
+      <div class="navgrupo abierto" data-grupo="busqueda">
+        <button class="navcab" data-grupo="busqueda">
+          <span class="flecha">&#9662;</span>Búsqueda
         </button>
         <div class="navsub">
-          <button class="navbtn" data-modo="validacion" data-proceso="comparacion"><span class="punto"></span>Comparación</button>
-          <button class="navbtn" id="btnAbrirCruce"><span class="punto"></span>Cruce contra base</button>
-        </div>
-      </div>
-      <div class="navgrupo abierto" data-grupo="consulta">
-        <button class="navcab" data-grupo="consulta">
-          <span class="flecha">▾</span>Consulta
-        </button>
-        <div class="navsub">
-          <button class="navbtn" id="btnAbrirBuscador"><span class="punto"></span>Buscar CUIT/DNI</button>
+          <button class="navbtn" id="btnAbrirBuscador"><span class="punto"></span>CUIT / DNI puntual</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>Cuitificar (listado)</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="denominacion"><span class="punto"></span>Denominaciones (2 columnas)</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="comparacion"><span class="punto"></span>Redes · 6 algoritmos</button>
+          <button class="navbtn" id="btnAbrirCruce"><span class="punto"></span>Redes · Cruce contra base</button>
         </div>
       </div>
     </nav>
@@ -725,10 +730,13 @@ async function cambiarUsuario(forzado){
 $("nombreUsuario").onclick = ()=>cambiarUsuario(false);
 
 /* ---------- inicio (historial) ---------- */
-const TITULOS = {mails:"Depuración de mails", osint:"OSINT de mails", telefonos:"Validación de teléfonos",
+const TITULOS = {mails:"Validación de mails (reglas)", osint:"Validación de mails (OSINT)",
+  telefonos:"Validación de teléfonos",
+  dep_mails:"Depuración de mails", dep_telefonos:"Depuración de teléfonos",
+  busqueda_cuits:"Búsqueda de CUITs en el padrón",
   cuitificacion:"Cuitificación", denominacion:"Validación de denominación",
   comparacion:"Redes sociales · Comparación de denominaciones",
-  cuit:"Validación de denominación",
+  cuit:"Denominación contra CUIT (BCRA)",
   norm_telefonos:"Normalización de teléfonos", norm_mails:"Normalización de mails",
   norm_ambos:"Normalización de teléfonos y mails", normalizacion:"Normalización"};
 
@@ -848,7 +856,8 @@ function reiniciarWizard(){
   }
 
   // modo validación
-  const disponible = ["mails","osint","telefonos","denominacion","cuitificacion","cuit","comparacion"].includes(estado.proceso);
+  const disponible = ["mails","osint","telefonos","denominacion","cuitificacion","cuit",
+                      "comparacion","dep_mails","dep_telefonos","busqueda_cuits"].includes(estado.proceso);
   $("cartaOrigen").classList.toggle("oculto", !disponible);
   $("cartaFuturo").classList.toggle("oculto", disponible);
   const esCuit = estado.proceso==="cuitificacion";
@@ -863,8 +872,10 @@ function reiniciarWizard(){
     $("lblColDato").textContent = "Columna de la denominación";
   }else{
     $("lblColId").textContent = "Columna del CUIT / identificador";
-    $("lblColDato").textContent = estado.proceso==="mails" ? "Columna del mail a depurar" :
-      (estado.proceso==="osint" ? "Columna del mail a consultar" : "Columna del teléfono a depurar");
+    $("lblColDato").textContent = (estado.proceso==="mails"||estado.proceso==="dep_mails") ? "Columna del mail" :
+      (estado.proceso==="dep_telefonos" ? "Columna del teléfono a depurar" :
+       estado.proceso==="busqueda_cuits" ? "Columna del CUIT a buscar" :
+      (estado.proceso==="osint" ? "Columna del mail a consultar" : "Columna del teléfono a validar"));
   }
   // Cuitificación usa UNA sola columna: el número. La denominación NO se aporta,
   // se TRAE del padrón. Por eso se oculta el segundo desplegable.

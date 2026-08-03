@@ -2170,6 +2170,12 @@ def descargar_csv(job_id: str):
                         filename=os.path.basename(path))
 
 
+# Endpoints del cruce de redes sociales. Viven en su propio módulo para que
+# agregar endpoints no obligue a editar este archivo (ver api/cruce_redes_api).
+from matecito.api import cruce_redes_api
+cruce_redes_api.montar(app, {"conexiones": CONEXIONES, "jobs": JOBS,
+                             "job_clase": Job})
+
 app.mount("/static", StaticFiles(directory=DIR_STATIC), name="static")
 
 if __name__ == "__main__":

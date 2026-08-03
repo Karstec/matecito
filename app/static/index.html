@@ -233,6 +233,7 @@
         </button>
         <div class="navsub">
           <button class="navbtn" data-modo="validacion" data-proceso="comparacion"><span class="punto"></span>Comparación</button>
+          <button class="navbtn" id="btnAbrirCruce"><span class="punto"></span>Cruce contra base</button>
         </div>
       </div>
       <div class="navgrupo abierto" data-grupo="consulta">
@@ -514,6 +515,63 @@
       <button class="btn btn-verde" id="btnConfirmarSin">Aceptar y generar</button>
       <button class="btn btn-gris" id="btnCancelarSin">Volver y completar</button>
     </div>
+  </div>
+</div>
+
+<div class="velo oculto" id="veloCruce">
+  <div class="modal" style="max-width:900px">
+    <h3>Cruce de nombres contra la base</h3>
+    <p style="font-size:13px; color:var(--mudo); margin:6px 0 14px">
+      Compara la columna de nombre de un archivo de contactos contra una columna de nombre
+      de la base, con los 6 algoritmos. Genera una tabla nueva; la tabla origen no se toca.
+    </p>
+
+    <div style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
+      <b style="font-size:13px">1 · Archivo de contactos</b>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
+        <input type="file" id="cruceArchivo" accept=".csv,.xlsx,.xlsm,.txt" style="flex:1">
+        <button class="btn btn-gris" id="btnCruceSubir">Leer columnas</button>
+      </div>
+      <div id="cruceInfoArchivo" style="font-size:12px; color:var(--mudo); margin-top:6px"></div>
+    </div>
+
+    <div id="cruceBloqueCols" class="oculto" style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
+      <b style="font-size:13px">2 · Columnas del archivo</b>
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:8px">
+        <label>Nombre a comparar<select id="cruceColNombre"></select></label>
+        <label>Identificador de fila<select id="cruceColId"></select></label>
+        <label>Teléfono (se arrastra)<select id="cruceColTel"></select></label>
+        <label>Mail (se arrastra)<select id="cruceColMail"></select></label>
+      </div>
+      <p style="font-size:12px; color:var(--mudo); margin:8px 0 0">
+        El teléfono y el mail viajan a la tabla resultante pero no participan de la comparación.
+      </p>
+    </div>
+
+    <div id="cruceBloqueBase" class="oculto" style="border-left:3px solid var(--verde); padding-left:12px; margin-bottom:14px">
+      <b style="font-size:13px">3 · Lado base</b>
+      <div id="cruceSinConexion" style="font-size:13px; color:#c05; margin-top:8px">
+        No hay conexión abierta. Conectate a una base desde la pantalla principal y volvé a abrir esta ventana.
+      </div>
+      <div id="cruceConConexion" class="oculto">
+        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:8px">
+          <label>Esquema<select id="cruceEsquema"></select></label>
+          <label>Tabla<select id="cruceTabla"></select></label>
+          <label>Columna del identificador<select id="cruceColIdBase"></select></label>
+          <label>Columna del nombre<select id="cruceColNombreBase"></select></label>
+          <label>Documento (DNI / RUT / CUIT)<select id="cruceColDoc"></select></label>
+          <label>Candidatos por fila<input type="number" id="cruceCandidatos" value="5" min="1" max="20"></label>
+        </div>
+        <label style="display:block; margin-top:10px">Filtro opcional (WHERE)
+          <input id="cruceWhere" placeholder="ConEstado = 'A'" autocomplete="off"></label>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
+      <button class="btn btn-gris" id="btnCerrarCruce">Cerrar</button>
+      <button class="btn btn-verde" id="btnCruceEjecutar" disabled>Ejecutar cruce</button>
+    </div>
+    <div id="cruceAviso" style="font-size:13px; margin-top:10px"></div>
   </div>
 </div>
 
@@ -992,6 +1050,156 @@ $("btnIniciarDB").onclick = ()=>{
 $("btnConfirmarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); iniciarProcesoDB(); };
 $("btnCancelarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); $("fCliente").focus(); };
 
+
+/* ---------- cruce de redes sociales contra la base ----------
+   Panel independiente: no toca estado.proceso ni la lógica de la pantalla
+   principal, igual que el buscador de padrón. Reusa la sesión de conexión
+   que ya está abierta (estado.session) en vez de pedir credenciales otra
+   vez: si no hay conexión, lo dice y no deja ejecutar. */
+const cruce = {token:null, columnas:[], listo:false};
+
+function opciones(sel, valores, permitirVacio){
+  const s = $(sel); s.innerHTML = "";
+  if(permitirVacio) s.appendChild(new Option("(ninguna)",""));
+  valores.forEach(v=>s.appendChild(new Option(v,v)));
+}
+
+function elegirPorNombre(sel, candidatos){
+  const s = $(sel);
+  for(const c of candidatos){
+    for(const o of s.options){
+      if(o.value.toUpperCase().includes(c)){ s.value = o.value; return; }
+    }
+  }
+}
+
+$("btnAbrirCruce").onclick = ()=>{
+  $("veloCruce").classList.remove("oculto");
+  $("cruceAviso").textContent = "";
+  const hay = !!estado.session;
+  $("cruceSinConexion").classList.toggle("oculto", hay);
+  $("cruceConConexion").classList.toggle("oculto", !hay);
+  if(hay) cargarEsquemasCruce();
+};
+$("btnCerrarCruce").onclick = ()=>$("veloCruce").classList.add("oculto");
+
+$("btnCruceSubir").onclick = async ()=>{
+  const f = $("cruceArchivo").files[0];
+  if(!f){ $("cruceInfoArchivo").textContent = "Elegí un archivo primero."; return; }
+  $("cruceInfoArchivo").textContent = "Leyendo…";
+  const fd = new FormData(); fd.append("archivo", f);
+  try{
+    const r = await fetch("/api/cruce-redes/subir", {method:"POST", body:fd});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || "no se pudo leer");
+    cruce.token = d.token; cruce.columnas = d.columnas;
+    $("cruceInfoArchivo").textContent =
+      `${d.archivo} · ${d.filas} filas · ${d.columnas.length} columnas`;
+    opciones("cruceColNombre", d.columnas, false);
+    opciones("cruceColId", d.columnas, false);
+    opciones("cruceColTel", d.columnas, true);
+    opciones("cruceColMail", d.columnas, true);
+    elegirPorNombre("cruceColNombre", ["NOMBRE","NAME","DENOMIN"]);
+    elegirPorNombre("cruceColId", ["N","ID"]);
+    elegirPorNombre("cruceColTel", ["TELEFONO","TEL","PHONE","CELULAR"]);
+    elegirPorNombre("cruceColMail", ["EMAIL","MAIL","CORREO"]);
+    $("cruceBloqueCols").classList.remove("oculto");
+    $("cruceBloqueBase").classList.remove("oculto");
+    revisarCruceListo();
+  }catch(e){
+    $("cruceInfoArchivo").textContent = "Error: " + e.message;
+    cruce.token = null; revisarCruceListo();
+  }
+};
+
+async function cargarEsquemasCruce(){
+  // Los esquemas ya los trajo la conexión de la pantalla principal y viven
+  // en su <select>. Se leen de ahí en vez de volver a pedirlos al servidor
+  // o de guardar una copia en `estado`, que sería un segundo lugar donde la
+  // misma lista puede quedar desactualizada.
+  const origen = $("selEsquema");
+  const valores = [...origen.options].map(o=>o.value).filter(v=>v);
+  if(!valores.length){
+    $("cruceAviso").innerHTML = "<span style='color:#c05'>La conexión no devolvió esquemas.</span>";
+    return;
+  }
+  opciones("cruceEsquema", valores, false);
+  if(origen.value) $("cruceEsquema").value = origen.value;
+  await cargarTablasCruce();
+}
+
+async function cargarTablasCruce(){
+  const esq = $("cruceEsquema").value;
+  if(!esq) return;
+  const r = await fetch(`/api/conexion/${estado.session}/tablas?esquema=${encodeURIComponent(esq)}`);
+  const d = await r.json();
+  opciones("cruceTabla", d.tablas || [], false);
+  await cargarColumnasCruce();
+}
+
+async function cargarColumnasCruce(){
+  const esq = $("cruceEsquema").value, tab = $("cruceTabla").value;
+  if(!esq || !tab) return;
+  const r = await fetch(`/api/conexion/${estado.session}/columnas?esquema=${encodeURIComponent(esq)}&tabla=${encodeURIComponent(tab)}`);
+  const d = await r.json();
+  const cols = (d.columnas || []).map(c => typeof c === "string" ? c : c.nombre || c[0]);
+  opciones("cruceColIdBase", cols, false);
+  opciones("cruceColNombreBase", cols, false);
+  opciones("cruceColDoc", cols, true);
+  elegirPorNombre("cruceColIdBase", ["CONCOD","ID","COD"]);
+  elegirPorNombre("cruceColNombreBase", ["NOMCOMPLETO","NOMBRE","DENOMIN"]);
+  elegirPorNombre("cruceColDoc", ["DOC","DNI","RUT","CUIT","CI"]);
+  revisarCruceListo();
+}
+
+$("cruceEsquema").onchange = cargarTablasCruce;
+$("cruceTabla").onchange = cargarColumnasCruce;
+
+function revisarCruceListo(){
+  const ok = !!cruce.token && !!estado.session &&
+             !!$("cruceTabla").value && !!$("cruceColNombreBase").value;
+  $("btnCruceEjecutar").disabled = !ok;
+}
+
+$("btnCruceEjecutar").onclick = async ()=>{
+  const idBase = $("cruceColIdBase").value, nomBase = $("cruceColNombreBase").value;
+  if(idBase === nomBase){
+    $("cruceAviso").innerHTML = "<span style='color:#c05'>El identificador y el nombre no pueden ser la misma columna.</span>";
+    return;
+  }
+  const fd = new FormData();
+  fd.append("session_id", estado.session);
+  fd.append("token", cruce.token);
+  fd.append("esquema", $("cruceEsquema").value);
+  fd.append("tabla_base", $("cruceTabla").value);
+  fd.append("col_id_base", idBase);
+  fd.append("col_denom_base", nomBase);
+  fd.append("col_doc_base", $("cruceColDoc").value);
+  fd.append("col_denom_archivo", $("cruceColNombre").value);
+  fd.append("col_id_archivo", $("cruceColId").value);
+  fd.append("col_telefono", $("cruceColTel").value);
+  fd.append("col_mail", $("cruceColMail").value);
+  fd.append("where_base", $("cruceWhere").value);
+  fd.append("candidatos_por_fila", $("cruceCandidatos").value);
+  fd.append("usuario", (estado.usuario || "MATECITO"));
+  fd.append("cliente", ($("cruceTabla").value || "CRUCE"));
+
+  $("btnCruceEjecutar").disabled = true;
+  $("cruceAviso").textContent = "Lanzando el cruce…";
+  try{
+    const r = await fetch("/api/cruce-redes/ejecutar", {method:"POST", body:fd});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || "falló el cruce");
+    // El token temporal se borra del lado del servidor al terminar, así que
+    // una segunda corrida necesita volver a subir el archivo.
+    cruce.token = null;
+    $("veloCruce").classList.add("oculto");
+    arrancarSeguimiento(d.job_id);
+  }catch(e){
+    $("cruceAviso").innerHTML = "<span style='color:#c05'>Error: " + e.message + "</span>";
+    $("btnCruceEjecutar").disabled = false;
+  }
+};
 
 /* ---------- buscador de CUIT/DNI en el padrón (consulta, no validación) ---------- */
 // No requiere conexión a una base: MATEcito se conecta al padrón por su cuenta

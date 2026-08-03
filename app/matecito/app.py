@@ -591,6 +591,39 @@ from matecito.procesos.registro import (
 
 
 def _tipos_columnas(db_type, proceso):
+    # DEPURACION DE MAILS: dos etapas separadas, cada una en su columna. El
+    # mail original nunca se pierde: es lo que permite revertir y auditar.
+    if proceso == "dep_mails":
+        cols = [
+            ("ID_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
+            ("MAIL_ORIGINAL", "VARCHAR2(320)", "VARCHAR(320)"),
+            ("MAIL_DEPURADO", "VARCHAR2(320)", "VARCHAR(320)"),
+            ("FUE_DEPURADO", "VARCHAR2(2)", "CHAR(2)"),
+            ("CAMBIOS", "VARCHAR2(1000)", "VARCHAR(1000)"),
+            ("FECHA_PROCESO", "DATE", "DATETIME"),
+        ]
+        idx = 1 if db_type == "oracle" else 2
+        return [(c[0], c[idx]) for c in cols]
+
+    # DEPURACION DE TELEFONOS: prefijo y numeracion SEPARADOS, sin veredicto.
+    # ORIGEN_PAIS deja registrado si el codigo de pais venia en el dato o si
+    # se asumio, que es la unica suposicion que hace este proceso.
+    if proceso == "dep_telefonos":
+        cols = [
+            ("ID_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
+            ("TELEFONO_ORIGINAL", "VARCHAR2(200)", "VARCHAR(200)"),
+            ("PREFIJO_PAIS", "VARCHAR2(5)", "VARCHAR(5)"),
+            ("NUMERO_NACIONAL", "VARCHAR2(20)", "VARCHAR(20)"),
+            ("TELEFONO_DEPURADO", "VARCHAR2(30)", "VARCHAR(30)"),
+            ("E164", "VARCHAR2(20)", "VARCHAR(20)"),
+            ("ORIGEN_PAIS", "VARCHAR2(12)", "VARCHAR(12)"),
+            ("FUE_DEPURADO", "VARCHAR2(2)", "CHAR(2)"),
+            ("CAMBIOS", "VARCHAR2(500)", "VARCHAR(500)"),
+            ("FECHA_PROCESO", "DATE", "DATETIME"),
+        ]
+        idx = 1 if db_type == "oracle" else 2
+        return [(c[0], c[idx]) for c in cols]
+
     # COMPARACIÓN: el DDL sale del registro de algoritmos de comparadores.py,
     # no está escrito acá. Agregar o sacar un algoritmo cambia la tabla sin
     # tocar app.py.
@@ -1058,6 +1091,59 @@ def _job_procesar_db(job, cx, params):
                         nom1, nom2, ahora, id_origen=str(i)))
                 if i % 5000 == 0:
                     job.escribir(f"  …{i}/{len(rows)} comparadas")
+        elif proceso == "dep_mails":
+            # DEPURAR: transforma y no juzga. No hay estado ni motivo de baja
+            # acá a propósito: si el mail sirve o no lo dice la validación,
+            # que es otro proceso.
+            from matecito.validadores.mails import Depurador
+            dep = Depurador()
+            job.escribir("Depurando mails (acentos, 'arroba'/'punto', typos de dominio)…")
+            for i, (id_val, dato) in enumerate(rows, 1):
+                depurado, cambios = dep.depurar(dato)
+                resultados.append({
+                    "ID_ORIGEN": id_val,
+                    "MAIL_ORIGINAL": dato,
+                    "MAIL_DEPURADO": depurado,
+                    "FUE_DEPURADO": "SI" if (cambios and depurado != dato) else "NO",
+                    "CAMBIOS": "; ".join(cambios)[:1000],
+                    "FECHA_PROCESO": ahora,
+                })
+                if i % 5000 == 0:
+                    job.escribir(f"  …{i}/{len(rows)} depurados")
+            tocados = sum(1 for r in resultados if r["FUE_DEPURADO"] == "SI")
+            job.escribir(f"  {tocados} de {len(resultados)} mails fueron corregidos.")
+
+        elif proceso == "dep_telefonos":
+            # Una celda puede traer VARIOS teléfonos ('/' o ';'), así que este
+            # proceso puede devolver más filas que las que leyó. No es un bug:
+            # partir la celda es justamente parte de depurar.
+            from matecito.validadores import telefonos_depurador as _td
+            job.escribir(f"Depurando teléfonos (país por defecto: {pais}; "
+                         f"se separa prefijo y numeración, sin validar)…")
+            for i, (id_val, dato) in enumerate(rows, 1):
+                partes = _td.depurar_celda(dato, pais)
+                if not partes:
+                    partes = [_td.depurar(dato, pais)]
+                for r in partes:
+                    resultados.append({
+                        "ID_ORIGEN": id_val,
+                        "TELEFONO_ORIGINAL": r["TELEFONO_ORIGINAL"],
+                        "PREFIJO_PAIS": r["PREFIJO_PAIS"],
+                        "NUMERO_NACIONAL": r["NUMERO_NACIONAL"],
+                        "TELEFONO_DEPURADO": r["TELEFONO_DEPURADO"],
+                        "E164": r["E164"],
+                        "ORIGEN_PAIS": r["ORIGEN_PAIS"],
+                        "FUE_DEPURADO": "SI" if r["FUE_DEPURADO"] else "NO",
+                        "CAMBIOS": "; ".join(r["CAMBIOS"])[:500],
+                        "FECHA_PROCESO": ahora,
+                    })
+                if i % 5000 == 0:
+                    job.escribir(f"  …{i}/{len(rows)} celdas procesadas")
+            asumidos = sum(1 for r in resultados if r["ORIGEN_PAIS"] == "asumido")
+            job.escribir(f"  {len(rows)} celdas → {len(resultados)} teléfonos. "
+                         f"{asumidos} con código de país asumido (revisar si el "
+                         f"origen mezcla países).")
+
         elif proceso == "telefonos":
             job.escribir(f"Validando teléfonos (país: {pais}, FIJO/MOVIL)…")
             for i, (id_val, dato) in enumerate(rows, 1):
@@ -1312,6 +1398,19 @@ def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
                 1 for r in resultados if r.get("ESTADO_OSINT") == "Error"
             ),
         }
+    elif proceso in ("dep_mails", "dep_telefonos"):
+        # DEPURACION: no hay bajas ni estados. Lo único que se cuenta es
+        # cuántos datos se tocaron y cuántos quedaron igual. Un dato que la
+        # depuración no cambió NO es un dato malo: es un dato que ya estaba
+        # bien escrito.
+        tocados = sum(1 for r in resultados if r.get("FUE_DEPURADO") == "SI")
+        job.stats = {"total": total, "depurados": tocados,
+                     "sin_cambios": total - tocados}
+        if proceso == "dep_telefonos":
+            job.stats["pais_asumido"] = sum(
+                1 for r in resultados if r.get("ORIGEN_PAIS") == "asumido")
+            job.stats["sin_numero"] = sum(
+                1 for r in resultados if not r.get("E164"))
     else:
         bajas = sum(1 for r in resultados if r["ESTADO"] == "BAJA")
         mods = sum(1 for r in resultados if r["ESTADO"] == "MODIFICADO")

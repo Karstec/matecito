@@ -41,7 +41,7 @@ PROCESOS = {
     "cuitificacion": {
         "categoria": "busqueda",
         "cols_origen": 1, "padron": True, "umbral": False,
-        "etiqueta": "Cuitificación",
+        "etiqueta": "CUIT/DNI en lote → datos del padrón BCRA",
     },
     "cuit": {
         "cols_origen": 2, "padron": True, "umbral": True,
@@ -71,12 +71,6 @@ PROCESOS = {
         "cols_origen": 1, "padron": False, "umbral": False,
         "categoria": "depuracion",
         "etiqueta": "Depurar teléfonos (símbolos, prefijo, +54)",
-    },
-    # --- BUSQUEDA: consulta el padrón, no modifica la tabla origen. ---
-    "busqueda_cuits": {
-        "cols_origen": 1, "padron": True, "umbral": False,
-        "categoria": "busqueda",
-        "etiqueta": "Buscar CUITs en el padrón BCRA",
     },
     "cruce_redes": {
         "categoria": "busqueda",

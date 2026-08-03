@@ -243,7 +243,7 @@
         </button>
         <div class="navsub">
           <button class="navbtn" id="btnAbrirBuscador"><span class="punto"></span>CUIT / DNI puntual</button>
-          <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>Cuitificar (listado)</button>
+          <button class="navbtn" data-modo="validacion" data-proceso="cuitificacion"><span class="punto"></span>CUIT/DNI en lote</button>
           <button class="navbtn" data-modo="validacion" data-proceso="denominacion"><span class="punto"></span>Denominaciones (2 columnas)</button>
           <button class="navbtn" data-modo="validacion" data-proceso="comparacion"><span class="punto"></span>Redes · 6 algoritmos</button>
           <button class="navbtn" id="btnAbrirCruce"><span class="punto"></span>Redes · Cruce contra base</button>
@@ -733,7 +733,6 @@ $("nombreUsuario").onclick = ()=>cambiarUsuario(false);
 const TITULOS = {mails:"Validación de mails (reglas)", osint:"Validación de mails (OSINT)",
   telefonos:"Validación de teléfonos",
   dep_mails:"Depuración de mails", dep_telefonos:"Depuración de teléfonos",
-  busqueda_cuits:"Búsqueda de CUITs en el padrón",
   cuitificacion:"Cuitificación", denominacion:"Validación de denominación",
   comparacion:"Redes sociales · Comparación de denominaciones",
   cuit:"Denominación contra CUIT (BCRA)",
@@ -857,7 +856,7 @@ function reiniciarWizard(){
 
   // modo validación
   const disponible = ["mails","osint","telefonos","denominacion","cuitificacion","cuit",
-                      "comparacion","dep_mails","dep_telefonos","busqueda_cuits"].includes(estado.proceso);
+                      "comparacion","dep_mails","dep_telefonos"].includes(estado.proceso);
   $("cartaOrigen").classList.toggle("oculto", !disponible);
   $("cartaFuturo").classList.toggle("oculto", disponible);
   const esCuit = estado.proceso==="cuitificacion";
@@ -874,7 +873,6 @@ function reiniciarWizard(){
     $("lblColId").textContent = "Columna del CUIT / identificador";
     $("lblColDato").textContent = (estado.proceso==="mails"||estado.proceso==="dep_mails") ? "Columna del mail" :
       (estado.proceso==="dep_telefonos" ? "Columna del teléfono a depurar" :
-       estado.proceso==="busqueda_cuits" ? "Columna del CUIT a buscar" :
       (estado.proceso==="osint" ? "Columna del mail a consultar" : "Columna del teléfono a validar"));
   }
   // Cuitificación usa UNA sola columna: el número. La denominación NO se aporta,

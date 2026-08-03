@@ -445,12 +445,7 @@ def ejecutar(db, filas_archivo, tabla_base, col_id_base, col_denom_base,
 
 def ejecutar_desde_archivo(db, ruta, **kwargs):
     """Atajo: lee el csv/xlsx y ejecuta el cruce."""
-    from .normalizador import leer_excel_contactos
+    from .normalizador import leer_contactos
     col = kwargs.get('col_denom_archivo', 'NOMBRE')
-    if ruta.lower().endswith(('.xlsx', '.xlsm')):
-        _, filas = leer_excel_contactos(ruta, col)
-    else:
-        import csv
-        with open(ruta, encoding='utf-8-sig', newline='') as f:
-            filas = list(csv.DictReader(f))
+    _, filas = leer_contactos(ruta, col)
     return ejecutar(db, filas, **kwargs)

@@ -284,13 +284,104 @@ def leer_excel_contactos(ruta, col_denominacion='NOMBRE'):
     return encabezados, filas
 
 
+def detectar_codificacion(ruta):
+    """
+    Devuelve la primera codificación que logra leer el archivo entero.
+
+    Los CSV exportados desde Excel en español vienen casi siempre en
+    CP1252/Latin-1, no en UTF-8. Abrirlos como UTF-8 rompe en la primera
+    tilde o Ñ, y abrirlos como Latin-1 cuando en realidad son UTF-8
+    convierte cada acento en mojibake ('JosÃ©'), que después el plegado
+    Unicode NO puede deshacer. Por eso se prueba en orden de más estricto a
+    más permisivo: utf-8 falla ruidosamente si el archivo no lo es, y
+    latin-1 nunca falla, así que va último como red.
+    """
+    for enc in ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1'):
+        try:
+            with open(ruta, 'r', encoding=enc) as f:
+                f.read()
+            return enc
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    return 'latin-1'
+
+
+def detectar_delimitador(ruta, codificacion):
+    """
+    Sniffing acotado a los cuatro separadores que aparecen en la práctica.
+    El punto y coma es el default de Excel en configuración regional
+    española, así que es tan probable como la coma.
+    """
+    import csv
+    with open(ruta, 'r', encoding=codificacion, newline='') as f:
+        muestra = f.read(8192)
+    try:
+        return csv.Sniffer().sniff(muestra, delimiters=',;\t|').delimiter
+    except Exception:
+        # Sin sniffing confiable: gana el que más aparece en la muestra.
+        conteos = {d: muestra.count(d) for d in (';', ',', '\t', '|')}
+        return max(conteos, key=conteos.get) if any(conteos.values()) else ','
+
+
+def leer_csv_contactos(ruta, col_denominacion='NOMBRE'):
+    """
+    Lee el CSV de contactos de redes sociales.
+
+    Mismo criterio que leer_excel_contactos: el encabezado NO se asume en la
+    primera fila, se busca la primera que contenga la columna esperada. Un
+    CSV exportado del mismo origen arrastra las mismas líneas de título que
+    el xlsx, y hardcodear un offset se rompe en cuanto cambia el export.
+
+    Devuelve (encabezados, lista_de_dicts).
+    """
+    import csv
+
+    codificacion = detectar_codificacion(ruta)
+    delimitador = detectar_delimitador(ruta, codificacion)
+
+    with open(ruta, 'r', encoding=codificacion, newline='') as f:
+        crudas = list(csv.reader(f, delimiter=delimitador))
+
+    encabezados = None
+    filas = []
+    for fila in crudas:
+        if encabezados is None:
+            valores = {str(c).strip().upper() for c in fila if c is not None}
+            if col_denominacion.upper() in valores:
+                encabezados = [str(c).strip() if c is not None else ''
+                               for c in fila]
+            continue
+        if all(c is None or str(c).strip() == '' for c in fila):
+            continue
+        # Filas con menos celdas que el encabezado se rellenan en vez de
+        # descartarse: un campo final vacío sin comilla es habitual y no
+        # invalida la fila.
+        fila = list(fila) + [''] * (len(encabezados) - len(fila))
+        filas.append(dict(zip(encabezados, fila)))
+
+    if encabezados is None:
+        raise ValueError(
+            f"No se encontro la fila de encabezado con la columna "
+            f"'{col_denominacion}' en {ruta}. Codificacion detectada: "
+            f"{codificacion}, delimitador: {delimitador!r}. "
+            f"Primera fila leida: {crudas[0][:8] if crudas else '(archivo vacio)'}")
+    return encabezados, filas
+
+
+def leer_contactos(ruta, col_denominacion='NOMBRE'):
+    """Despacha a xlsx o csv segun la extension."""
+    if str(ruta).lower().endswith(('.xlsx', '.xlsm')):
+        return leer_excel_contactos(ruta, col_denominacion)
+    return leer_csv_contactos(ruta, col_denominacion)
+
+
 def diagnostico(ruta, col_denominacion='NOMBRE'):
     """
     Reporte previo a cualquier comparacion: cuantas filas son comparables,
     cuantas son ruido y por que. Sirve para decidir el filtro antes de
     generar la tabla resultante, no despues.
     """
-    encabezados, filas = leer_excel_contactos(ruta, col_denominacion)
+    encabezados, filas = leer_contactos(ruta, col_denominacion)
     print(f"Archivo: {ruta}")
     print(f"Columnas detectadas ({len(encabezados)}): {', '.join(encabezados)}")
     print(f"Filas de datos: {len(filas)}\n")

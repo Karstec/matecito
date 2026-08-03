@@ -85,6 +85,16 @@ def _limitar_emails_osint(emails, proveedores, limite=LIMITE_INTERACCIONES_OSINT
     return emails[:max_emails], max_emails
 
 
+def _celda_muestra(valor, largo=80):
+    """Representación corta y segura de una celda para la previsualización."""
+    if valor is None:
+        return None
+    texto = str(valor).replace("\n", " ").replace("\r", " ").strip()
+    if texto == "":
+        return ""
+    return texto if len(texto) <= largo else texto[:largo - 1] + "…"
+
+
 def config_padron():
     """Config de la fuente del padron. Por defecto MODO AUTO: Python abre su
     propia conexion al padron desde las credenciales cifradas (enfoque nexo, sin
@@ -96,6 +106,8 @@ def config_padron():
         return {"modo": "dblink", "dblink": PADRON_DBLINK, "tabla": PADRON_TABLA}
     # 'auto' (default): credenciales del archivo cifrado en DIR_APP.
     return {"modo": "auto", "dir_base": RAIZ_PROYECTO, "tabla": PADRON_TABLA}
+from matecito.nucleo.previsualizacion import (previsualizar,
+                                             IdentificadorInvalido)
 from matecito.nucleo.normalizador import (normalizar_filas, separar_valores,
                           estadisticas_normalizacion)
 
@@ -1827,6 +1839,45 @@ def api_columnas(sid: str, esquema: str, tabla: str):
         return {"columnas": cx.columnas(esquema, tabla)}
     except Exception as e:
         raise HTTPException(400, f"No se pudieron listar las columnas: {e}")
+
+
+@app.get("/api/conexion/{sid}/muestra")
+def api_muestra(sid: str, esquema: str, tabla: str, columnas: str = "",
+                limite: int = 10):
+    """
+    Primeras N filas de la tabla elegida, para confirmar ANTES de ejecutar
+    que es la tabla y las columnas correctas.
+
+    Es de SOLO LECTURA: un SELECT acotado, sin transacción y sin COUNT(*).
+    El COUNT se omite a propósito — sobre una tabla FEDERATED o de decenas de
+    millones de filas puede tardar minutos, y una confirmación que tarda deja
+    de usarse.
+
+    `columnas` es una lista separada por comas. Vacía = todas.
+    """
+    cx = CONEXIONES.get(sid)
+    if not cx:
+        raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
+    cols = [c.strip() for c in columnas.split(",") if c.strip()] or None
+    destino = f"{esquema}.{tabla}" if esquema else tabla
+    try:
+        vista = previsualizar(cx, destino, columnas=cols,
+                              limite=max(1, min(limite, 50)))
+    except IdentificadorInvalido as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"No se pudo leer la muestra de {destino}: {e}")
+
+    # Las celdas se recortan del lado del servidor: una columna CLOB puede
+    # traer megabytes por fila y no tiene sentido mandarlos para mostrar 10
+    # filas en una tabla.
+    filas = [[_celda_muestra(v) for v in fila] for fila in vista["filas"]]
+    return {
+        "columnas": vista["columnas"],
+        "filas": filas,
+        "cantidad": vista["cantidad"],
+        "diagnostico": vista["diagnostico"],
+    }
 
 
 @app.post("/api/procesos/db")

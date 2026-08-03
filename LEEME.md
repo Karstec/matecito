@@ -153,3 +153,17 @@ contenga la columna de nombre esperada. El mensaje de error dice qué
 codificación y qué delimitador detectó, y muestra la primera fila leída.
 
 **Un proceso del padrón dice que no hay credenciales** — falta el paso 3.
+
+---
+
+## Previsualización antes de ejecutar
+
+En el flujo por base de datos, debajo de la selección de columnas y antes del
+botón de iniciar, hay un panel plegable **"Ver primeros registros de la
+tabla"**. Muestra las 10 primeras filas y, por cada columna, cuántas vienen
+nulas o vacías y cuántos valores distintos hay.
+
+Sirve para confirmar que la tabla y las columnas elegidas son las correctas.
+Si una columna aparece marcada `TODA NULA`, casi seguro no es la que se
+busca. Es de solo lectura y no bloquea nada: el proceso se puede ejecutar sin
+abrir el panel.

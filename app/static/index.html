@@ -175,6 +175,26 @@
   .osint-contador{font-size:12px; color:var(--verde-osc); font-weight:700;
     min-width:120px; padding-bottom:9px;}
 
+
+  /* --- Previsualizacion de la tabla origen --- */
+  .prevbloque{margin:10px 0 4px; border:1px solid #d9dee3; border-radius:6px; overflow:hidden;}
+  .prevcab{width:100%; text-align:left; background:#f4f6f8; border:0; padding:9px 12px;
+    font-size:13px; font-weight:600; cursor:pointer; color:#1f4e78;}
+  .prevcab:hover{background:#eaeef2;}
+  .prevcab .flecha{display:inline-block; margin-right:6px; transition:transform .15s;}
+  .prevcab.abierto .flecha{transform:rotate(90deg);}
+  .prevcuerpo{padding:10px 12px; background:#fff;}
+  .prevestado{font-size:12px; color:#666; margin-bottom:8px;}
+  .prevscroll{overflow:auto; max-height:260px; border:1px solid #eceff1; border-radius:4px;}
+  .prevtabla{border-collapse:collapse; font-size:12px; width:100%;}
+  .prevtabla th{position:sticky; top:0; background:#1f4e78; color:#fff; text-align:left;
+    padding:5px 8px; white-space:nowrap; font-weight:600;}
+  .prevtabla td{padding:4px 8px; border-bottom:1px solid #f0f2f4; white-space:nowrap;
+    max-width:280px; overflow:hidden; text-overflow:ellipsis;}
+  .prevtabla tr:nth-child(even) td{background:#fafbfc;}
+  .prevtabla .nulo{color:#b0b6bb; font-style:italic;}
+  .prevdiag{font-size:12px; color:#666; margin-top:8px; line-height:1.6;}
+  .prevdiag .alerta{color:#c05; font-weight:600;}
   .oculto{display:none !important;}
 
   /* modal */
@@ -401,6 +421,20 @@
           quedará <b>usuario_fecha</b> solamente.
         </div>
         <div class="nota-tabla">Se creará: <b id="previewTabla">—</b></div>
+        <!-- PREVISUALIZACION: confirmar que la tabla y las columnas elegidas
+             son las correctas ANTES de ejecutar. Solo lectura: un SELECT
+             acotado, sin transaccion. -->
+        <div class="prevbloque" id="prevBloque">
+          <button class="prevcab" id="btnPrevisualizar" type="button">
+            <span class="flecha" id="prevFlecha">&#9656;</span>
+            Ver primeros registros de la tabla
+          </button>
+          <div class="prevcuerpo oculto" id="prevCuerpo">
+            <div id="prevEstado" class="prevestado">—</div>
+            <div class="prevscroll"><table class="prevtabla" id="prevTabla"></table></div>
+            <div id="prevDiag" class="prevdiag"></div>
+          </div>
+        </div>
         <div class="fila-botones">
           <button class="btn btn-verde" id="btnIniciarDB">Generar tabla e iniciar proceso</button>
         </div>
@@ -1059,6 +1093,95 @@ $("btnIniciarDB").onclick = ()=>{
 $("btnConfirmarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); iniciarProcesoDB(); };
 $("btnCancelarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); $("fCliente").focus(); };
 
+
+/* ---------- previsualización de la tabla origen ----------
+   Confirma, antes de ejecutar, que la tabla y las columnas elegidas
+   contienen lo que uno cree. Elegir MAIL cuando la buena era
+   MAIL_ALTERNATIVO, o una columna vacía en el 90% de las filas, hoy se
+   descubre DESPUÉS de correr el proceso. Esto lo pone antes.
+
+   Es de solo lectura y no bloquea nada: el proceso se puede ejecutar sin
+   abrir el panel. La confirmación la da la persona, no este código. */
+function prevColumnasElegidas(){
+  // Solo las columnas que el proceso va a usar. Si no hay ninguna elegida
+  // todavía, se muestran todas: ver la tabla entera también sirve para
+  // decidir cuál columna elegir.
+  const c = [];
+  ["selColId","selColDato"].forEach(id=>{
+    const el = $(id);
+    if(el && el.value && !el.closest(".oculto")) c.push(el.value);
+  });
+  return [...new Set(c)];
+}
+
+async function cargarPrevisualizacion(){
+  const esq = $("selEsquema").value, tab = $("selTabla").value;
+  if(!estado.session || !tab){
+    $("prevEstado").textContent = "Elegí una tabla primero.";
+    $("prevTabla").innerHTML = ""; $("prevDiag").innerHTML = "";
+    return;
+  }
+  $("prevEstado").textContent = "Leyendo primeros registros…";
+  $("prevTabla").innerHTML = ""; $("prevDiag").innerHTML = "";
+  const cols = prevColumnasElegidas();
+  const q = `esquema=${encodeURIComponent(esq)}&tabla=${encodeURIComponent(tab)}`
+          + `&limite=10&columnas=${encodeURIComponent(cols.join(","))}`;
+  try{
+    const r = await fetch(`/api/conexion/${estado.session}/muestra?${q}`);
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || "no se pudo leer");
+    if(!d.cantidad){
+      $("prevEstado").innerHTML = "<span style='color:#c05'>La tabla no devolvió ninguna fila.</span>";
+      return;
+    }
+    const alcance = cols.length ? `columnas ${cols.join(", ")}` : "todas las columnas";
+    $("prevEstado").textContent =
+      `${d.cantidad} primeras filas de ${esq ? esq+"." : ""}${tab} · ${alcance}`;
+
+    let html = "<thead><tr>" + d.columnas.map(c=>`<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+    d.filas.forEach(f=>{
+      html += "<tr>" + f.map(v=>{
+        if(v === null) return "<td class='nulo'>(null)</td>";
+        if(v === "")   return "<td class='nulo'>(vacío)</td>";
+        return `<td>${v.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</td>`;
+      }).join("") + "</tr>";
+    });
+    $("prevTabla").innerHTML = html + "</tbody>";
+
+    // El diagnóstico es una SEÑAL sobre la muestra, no una estadística de la
+    // tabla: si 10 de 10 vienen nulas, la columna elegida casi seguro no es
+    // la que se busca.
+    $("prevDiag").innerHTML = d.diagnostico.map(x=>{
+      const avisos = [];
+      if(x.nulos === d.cantidad) avisos.push("<span class='alerta'>TODA NULA</span>");
+      else if(x.nulos) avisos.push(`${x.nulos} nulas`);
+      if(x.vacios) avisos.push(`${x.vacios} vacías`);
+      if(x.distintos === 1 && d.cantidad > 1) avisos.push("<span class='alerta'>un solo valor distinto</span>");
+      return `<b>${x.columna}</b>: largo ${x.largo_min}-${x.largo_max}, `
+           + `${x.distintos} distintos` + (avisos.length ? ` — ${avisos.join(", ")}` : "");
+    }).join("<br>");
+  }catch(e){
+    $("prevEstado").innerHTML = `<span style='color:#c05'>Error: ${e.message}</span>`;
+  }
+}
+
+$("btnPrevisualizar").onclick = ()=>{
+  const cuerpo = $("prevCuerpo"), cab = $("btnPrevisualizar");
+  const abrir = cuerpo.classList.contains("oculto");
+  cuerpo.classList.toggle("oculto", !abrir);
+  cab.classList.toggle("abierto", abrir);
+  if(abrir) cargarPrevisualizacion();
+};
+
+// Si cambia la tabla o alguna columna con el panel abierto, se recarga solo:
+// una muestra vieja de otra tabla es peor que no mostrar nada.
+["selEsquema","selTabla","selColId","selColDato"].forEach(id=>{
+  const el = $(id);
+  if(!el) return;
+  el.addEventListener("change", ()=>{
+    if(!$("prevCuerpo").classList.contains("oculto")) cargarPrevisualizacion();
+  });
+});
 
 /* ---------- cruce de redes sociales contra la base ----------
    Panel independiente: no toca estado.proceso ni la lógica de la pantalla

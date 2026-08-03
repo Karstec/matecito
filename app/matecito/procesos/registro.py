@@ -51,6 +51,14 @@ PROCESOS = {
         "cols_origen": 2, "padron": False, "umbral": False,
         "etiqueta": "REDES SOCIALES · Comparación de algoritmos",
     },
+    # Origen ARCHIVO en vez de columnas de una tabla: por eso cols_origen=0.
+    # La pantalla pide el csv/xlsx primero y recién después las credenciales
+    # y la selección esquema -> tabla -> columna del lado base.
+    "cruce_redes": {
+        "cols_origen": 0, "padron": False, "umbral": True,
+        "origen": "archivo", "destino": "tabla",
+        "etiqueta": "REDES SOCIALES · Cruce de nombres contra la base",
+    },
 }
 
 

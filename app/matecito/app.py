@@ -17,7 +17,6 @@ import io
 import re
 import csv
 import sys
-import json
 import uuid
 import queue
 import threading
@@ -34,7 +33,14 @@ from matecito.api.schemas import (
     ProcesoDBRequest,
     UsuarioRequest,
 )
-from matecito.config import LIMITE_INTERACCIONES_OSINT
+from matecito.config import (
+    DIR_APP,
+    DIR_LISTAS,
+    DIR_SALIDAS,
+    DIR_STATIC,
+    LIMITE_INTERACCIONES_OSINT,
+    RAIZ_PROYECTO,
+)
 
 # --- lógica de validación ---
 from matecito.validadores.telefonos import (validar_telefono, fila_resultado,
@@ -50,6 +56,14 @@ from matecito.padron.bcra import abrir_padron, TABLA_PADRON_DEFAULT
 from matecito.nucleo.claves_padron import (armar_claves, consultar_padron,
                            buscar_filas_cuit, buscar_filas_dni)
 from matecito.nucleo.conexiones import ConexionWeb, inicializar_oracle
+from matecito.nucleo.persistencia import (
+    cargar_historial,
+    cargar_presets,
+    guardar_presets,
+    guardar_usuario,
+    leer_usuario_guardado,
+    persistir_en_historial,
+)
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
 from matecito.validadores import osint_email
@@ -118,10 +132,7 @@ from matecito.nucleo.normalizador import (normalizar_filas, separar_valores,
 # El agente de mails ahora vive DENTRO del paquete
 # (matecito/validadores/mails/agente.py), así que ya no hace falta
 # buscarlo en varias rutas ni depender de una ruta local del proyecto.
-# DIR_APP es la carpeta del paquete; RAIZ_PROYECTO es la raíz del repo,
-# donde viven static/, salidas/, listas/ y los archivos de configuración.
-DIR_APP = os.path.dirname(os.path.abspath(__file__))
-RAIZ_PROYECTO = os.path.dirname(DIR_APP)
+# DIR_APP es la carpeta del paquete; RAIZ_PROYECTO es la raíz del repo.
 
 EmailAgent = None
 EMAIL_AGENT_ERR = ""
@@ -141,36 +152,7 @@ def _localizar_agente():
 
 _localizar_agente()
 
-# static/, salidas/, listas/ y la config viven en la RAÍZ del repo, no
-# dentro del paquete: son datos del despliegue, no código.
-DIR_SALIDAS = os.path.join(RAIZ_PROYECTO, "salidas")
 os.makedirs(DIR_SALIDAS, exist_ok=True)
-DIR_LISTAS = os.path.join(RAIZ_PROYECTO, "listas")
-DIR_STATIC = os.path.join(RAIZ_PROYECTO, "static")
-ARCHIVO_PRESETS = os.path.join(RAIZ_PROYECTO, "matecito_presets.json")
-ARCHIVO_USUARIO = os.path.join(RAIZ_PROYECTO, "jueves_usuario.json")
-ARCHIVO_HISTORIAL = os.path.join(RAIZ_PROYECTO, "matecito_historial.json")
-HISTORIAL_MAX = 300
-_HIST_LOCK = threading.Lock()
-
-
-def cargar_historial():
-    try:
-        with open(ARCHIVO_HISTORIAL, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def persistir_en_historial(entrada):
-    """Guarda o actualiza una entrada del historial (por id). Thread-safe."""
-    with _HIST_LOCK:
-        hist = cargar_historial()
-        hist = [e for e in hist if e.get("id") != entrada["id"]]
-        hist.insert(0, entrada)
-        hist = hist[:HISTORIAL_MAX]
-        with open(ARCHIVO_HISTORIAL, "w", encoding="utf-8") as f:
-            json.dump(hist, f, indent=1, ensure_ascii=False)
 
 app = FastAPI(title="MATEcito Web", version="1.0")
 inicializar_oracle()
@@ -245,32 +227,6 @@ def usuario_de_sesion(request, defecto=True):
     if sid and sid in SESIONES_USUARIO:
         return SESIONES_USUARIO[sid]
     return leer_usuario_guardado() if defecto else ""
-
-
-def leer_usuario_guardado():
-    try:
-        with open(ARCHIVO_USUARIO, "r", encoding="utf-8") as f:
-            return json.load(f).get("usuario", "")
-    except Exception:
-        return ""
-
-
-def guardar_usuario(usuario):
-    with open(ARCHIVO_USUARIO, "w", encoding="utf-8") as f:
-        json.dump({"usuario": usuario}, f, ensure_ascii=False)
-
-
-def cargar_presets():
-    try:
-        with open(ARCHIVO_PRESETS, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def guardar_presets(presets):
-    with open(ARCHIVO_PRESETS, "w", encoding="utf-8") as f:
-        json.dump(presets, f, indent=2, ensure_ascii=False)
 
 
 # =====================================================================

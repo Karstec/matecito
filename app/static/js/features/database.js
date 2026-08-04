@@ -34,6 +34,7 @@ async function guardarPreset(){
       port:$("fPort").value,
       user:$("fUser").value,
       dbname:$("fDbname").value,
+      password:$("fPass").value, // # TODO: Se guarda la contraseña SOLO DESARROLLO.
     }}),
   });
   await cargarPresets();

@@ -62,8 +62,8 @@ from matecito.nucleo.persistencia import (
     guardar_presets,
     guardar_usuario,
     leer_usuario_guardado,
-    persistir_en_historial,
 )
+from matecito.nucleo.trabajos import JOBS, Job
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
 from matecito.validadores import osint_email
@@ -227,63 +227,6 @@ def usuario_de_sesion(request, defecto=True):
     if sid and sid in SESIONES_USUARIO:
         return SESIONES_USUARIO[sid]
     return leer_usuario_guardado() if defecto else ""
-
-
-# =====================================================================
-# JOBS (procesos en segundo plano con progreso)
-# =====================================================================
-class Job:
-    def __init__(self, tipo, origen="db", descripcion="", usuario="", cliente=""):
-        self.id = uuid.uuid4().hex[:12]
-        self.tipo = tipo
-        self.origen = origen              # "db" | "archivo"
-        self.descripcion = descripcion    # esquema.tabla u origen del archivo
-        self.usuario = usuario
-        self.cliente = cliente
-        self.fecha_inicio = datetime.now().isoformat(timespec="seconds")
-        self.fecha_fin = None
-        self.estado = "EN_CURSO"
-        self.log = []
-        self.stats = {}
-        self.tabla_resultado = None
-        self.csv_path = None
-        self.error = None
-        self._lock = threading.Lock()
-        persistir_en_historial(self.a_entrada())  # queda registrado desde el arranque
-
-    def escribir(self, msg):
-        with self._lock:
-            self.log.append(f"{datetime.now().strftime('%H:%M:%S')}  {msg}")
-
-    def finalizar(self, estado):
-        self.estado = estado
-        self.fecha_fin = datetime.now().isoformat(timespec="seconds")
-        persistir_en_historial(self.a_entrada())
-
-    def a_entrada(self):
-        with self._lock:
-            return {
-                "id": self.id, "tipo": self.tipo, "origen": self.origen,
-                "descripcion": self.descripcion, "usuario": self.usuario,
-                "cliente": self.cliente, "fecha_inicio": self.fecha_inicio,
-                "fecha_fin": self.fecha_fin, "estado": self.estado,
-                "stats": self.stats, "tabla_resultado": self.tabla_resultado,
-                "csv": os.path.basename(self.csv_path) if self.csv_path else None,
-                "error": self.error, "log": list(self.log),
-            }
-
-    def snapshot(self, desde=0):
-        with self._lock:
-            return {
-                "id": self.id, "tipo": self.tipo, "estado": self.estado,
-                "descripcion": self.descripcion, "fecha_inicio": self.fecha_inicio,
-                "log": self.log[desde:], "total_log": len(self.log),
-                "stats": self.stats, "tabla_resultado": self.tabla_resultado,
-                "tiene_csv": bool(self.csv_path), "error": self.error,
-            }
-
-
-JOBS = {}
 
 
 # El registro de procesos vive en procesos/registro.py: ES el archivo

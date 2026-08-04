@@ -1,8 +1,8 @@
 import { $ } from "./core/dom.js";
+import { MEDIOS_NORM } from "./core/process-metadata.js";
 import { estado } from "./core/state.js";
 import {
   actualizarLimiteOsint,
-  cargarProveedoresOsint,
   initOsint,
   LIMITE_INTERACCIONES_OSINT,
   limiteInteraccionesOsint,
@@ -13,13 +13,13 @@ import {
   detenerPoll,
   initProcessRunner,
 } from "./features/process-runner.js";
-
-// Qué medios normaliza cada opción del grupo Normalización
-const MEDIOS_NORM = {
-  norm_telefonos: ["telefonos"],
-  norm_mails: ["mails"],
-  norm_ambos: ["telefonos", "mails"],
-};
+import { cargarHistorial, initHistory } from "./features/history.js";
+import {
+  initNavigation,
+  irInicio,
+  ocultarTodo,
+  reiniciarWizard,
+} from "./features/navigation.js";
 
 /* ---------- inicio ---------- */
 async function init(){
@@ -59,173 +59,6 @@ async function cambiarUsuario(forzado){
   actualizarPreview();
 }
 $("nombreUsuario").onclick = ()=>cambiarUsuario(false);
-
-/* ---------- inicio (historial) ---------- */
-const TITULOS = {mails:"Validación de mails (reglas)", osint:"Validación de mails (OSINT)",
-  telefonos:"Validación de teléfonos",
-  dep_mails:"Depuración de mails", dep_telefonos:"Depuración de teléfonos",
-  cuitificacion:"Cuitificación", denominacion:"Validación de denominación",
-  comparacion:"Redes sociales · Comparación de denominaciones",
-  cuit:"Denominación contra CUIT (BCRA)",
-  norm_telefonos:"Normalización de teléfonos", norm_mails:"Normalización de mails",
-  norm_ambos:"Normalización de teléfonos y mails", normalizacion:"Normalización"};
-
-function ocultarTodo(){
-  ["cartaOrigen","cartaConexion","cartaSeleccion","cartaGeneracion",
-   "cartaArchivo","cartaArchivoNorm","cartaProgreso","cartaFuturo","cartaHistorial",
-   "cartaCruce"]
-   .forEach(id=>$(id).classList.add("oculto"));
-}
-
-async function irInicio(){
-  detenerPoll();
-  ocultarTodo();
-  document.querySelectorAll(".navbtn").forEach(x=>x.classList.remove("activo"));
-  $("tituloProceso").textContent = "Inicio — historial de procesos";
-  $("chipEstado").textContent = "inicio";
-  $("cartaHistorial").classList.remove("oculto");
-  await cargarHistorial();
-}
-$("logoInicio").onclick = irInicio;
-$("rolInicio").onclick = irInicio;
-$("btnRefrescarHist").onclick = cargarHistorial;
-
-function fmtFecha(iso){
-  if(!iso) return "—";
-  const d = new Date(iso), p = n=>String(n).padStart(2,"0");
-  return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-function badgeEstado(e){
-  const m = {OK:["badge-ok","Exitoso"], ERROR:["badge-error","Falló"],
-    EN_CURSO:["badge-curso","En curso"], INTERRUMPIDO:["badge-int","Interrumpido"]};
-  const [cls, txt] = m[e] || ["badge-int", e];
-  return `<span class="badge ${cls}">${txt}</span>`;
-}
-async function cargarHistorial(){
-  const hist = await fetch("/api/historial").then(x=>x.json()).catch(()=>[]);
-  const tb = $("cuerpoHistorial");
-  tb.innerHTML = "";
-  $("histVacio").classList.toggle("oculto", hist.length>0);
-  for(const e of hist){
-    const tr = document.createElement("tr");
-    tr.className = "fila-hist";
-    tr.title = "Clic para ver el detalle";
-    const resultado = e.tabla_resultado || (e.csv ? "CSV" : (e.error ? String(e.error).slice(0,50) : "—"));
-    // Botón de descarga directo en la lista: el CSV vive en el SERVIDOR, así
-    // que se puede volver a bajar cuando sea, aunque en su momento se haya
-    // dicho "No, gracias" o se entre después desde otra PC.
-    const celdaCsv = e.tiene_csv
-      ? `<button class="btn-mini" data-csv="${e.id}" title="Descargar el CSV a tu PC">⬇ Descargar</button>`
-      : `<span style="color:var(--mudo); font-size:12px;">—</span>`;
-    tr.innerHTML = `<td>${TITULOS[e.tipo]||e.tipo}</td>
-      <td>${e.descripcion||"—"}</td>
-      <td>${fmtFecha(e.fecha_inicio)}</td>
-      <td>${e.usuario||"—"}</td>
-      <td>${badgeEstado(e.estado)}</td>
-      <td style="font-family:Consolas,monospace; font-size:12px;">${resultado}</td>
-      <td>${celdaCsv}</td>`;
-    tr.onclick = ev=>{
-      // el botón de descarga no debe abrir también el detalle
-      if(ev.target.closest("[data-csv]")) return;
-      verDetalle(e);
-    };
-    const btn = tr.querySelector("[data-csv]");
-    if(btn) btn.onclick = ()=>{ window.location = `/api/procesos/${e.id}/csv`; };
-    tb.appendChild(tr);
-  }
-}
-function verDetalle(e){
-  ocultarTodo();
-  estado.esArchivo = false;  // desde el historial nunca se auto-descarga
-  $("tituloProceso").textContent = `${TITULOS[e.tipo]||e.tipo} — detalle`;
-  // arrancarSeguimiento trae el log completo; si sigue EN_CURSO retoma el
-  // vivo, y si ya terminó muestra stats + opción de CSV en una sola pasada.
-  arrancarSeguimiento(e.id);
-}
-
-/* ---------- navegación: grupos colapsables ---------- */
-document.querySelectorAll(".navcab").forEach(cab=>{
-  cab.onclick = ()=>{
-    const grupo = cab.closest(".navgrupo");
-    grupo.classList.toggle("abierto");
-    const f = cab.querySelector(".flecha");
-    if(f) f.textContent = grupo.classList.contains("abierto") ? "▾" : "▸";
-  };
-});
-
-/* ---------- navegación de procesos ---------- */
-document.querySelectorAll(".navbtn").forEach(b=>{
-  b.onclick = ()=>{
-    document.querySelectorAll(".navbtn").forEach(x=>x.classList.remove("activo"));
-    b.classList.add("activo");
-    estado.modo = b.dataset.modo;
-    estado.proceso = b.dataset.proceso;
-    $("tituloProceso").textContent = TITULOS[estado.proceso];
-    reiniciarWizard();
-  };
-});
-
-function reiniciarWizard(){
-  detenerPoll();
-  ocultarTodo();
-  $("opDB").classList.remove("sel"); $("opArchivo").classList.remove("sel");
-  estado.origen = null;
-
-  if(estado.modo==="normalizacion"){
-    // La normalización es SOLO por archivo plano: se salta la elección de
-    // origen y se muestra directamente la carta de archivo.
-    estado.origen = "archivo";
-    estado.esArchivo = true;
-    $("cartaOrigen").classList.add("oculto");
-    $("cartaFuturo").classList.add("oculto");
-    const medios = MEDIOS_NORM[estado.proceso] || [];
-    $("txtMediosNorm").textContent =
-      medios.length===2 ? "teléfonos y mails" : (medios[0]==="telefonos" ? "teléfonos" : "mails");
-    $("cartaArchivoNorm").classList.remove("oculto");
-    $("chipEstado").textContent = "listo";
-    return;
-  }
-
-  // modo validación
-  const disponible = ["mails","osint","telefonos","denominacion","cuitificacion","cuit",
-                      "comparacion","dep_mails","dep_telefonos"].includes(estado.proceso);
-  $("cartaOrigen").classList.toggle("oculto", !disponible);
-  $("cartaFuturo").classList.toggle("oculto", disponible);
-  const esCuit = estado.proceso==="cuitificacion";
-  const esValidCuit = estado.proceso==="cuit";
-  if(estado.proceso==="denominacion" || estado.proceso==="comparacion"){
-    $("lblColId").textContent = "Columna 1 — denominación origen";
-    $("lblColDato").textContent = "Columna 2 — denominación a validar";
-  }else if(esCuit){
-    $("lblColId").textContent = "Columna del CUIT o DNI";
-  }else if(esValidCuit){
-    $("lblColId").textContent = "Columna del CUIT o DNI";
-    $("lblColDato").textContent = "Columna de la denominación";
-  }else{
-    $("lblColId").textContent = "Columna del CUIT / identificador";
-    $("lblColDato").textContent = (estado.proceso==="mails"||estado.proceso==="dep_mails") ? "Columna del mail" :
-      (estado.proceso==="dep_telefonos" ? "Columna del teléfono a depurar" :
-      (estado.proceso==="osint" ? "Columna del mail a consultar" : "Columna del teléfono a validar"));
-  }
-  // Cuitificación usa UNA sola columna: el número. La denominación NO se aporta,
-  // se TRAE del padrón. Por eso se oculta el segundo desplegable.
-  // Validación de CUIT sí usa dos columnas (número + denominación a comparar).
-  $("grupoColDato").classList.toggle("oculto", esCuit);
-  $("avisoCuitificacion").classList.toggle("oculto", !esCuit);
-  $("avisoCuit").classList.toggle("oculto", !esValidCuit);
-  // El selector CUIT/DNI aparece en cuitificación y en validación de CUIT.
-  $("grupoTipoBusqueda").classList.toggle("oculto", !(esCuit || esValidCuit));
-  $("grupoPais").classList.toggle("oculto", estado.proceso!=="telefonos");
-  $("grupoPaisArch").classList.toggle("oculto", estado.proceso!=="telefonos");
-  $("grupoOsint").classList.toggle("oculto", estado.proceso!=="osint");
-  if(estado.proceso==="osint") cargarProveedoresOsint();
-  // El umbral aplica a denominación Y a validación de CUIT (compara nombres).
-  const usaUmbral = estado.proceso==="denominacion" || esValidCuit;
-  $("grupoUmbral").classList.toggle("oculto", !usaUmbral);
-  $("grupoUmbralArch").classList.toggle("oculto", !usaUmbral);
-  $("avisoUmbral").classList.toggle("oculto", !usaUmbral);
-  $("chipEstado").textContent = "listo";
-}
 
 /* ---------- paso 1: origen ---------- */
 function elegirOrigen(o){
@@ -870,4 +703,11 @@ $("btnNuevoProceso").onclick = ()=>{
 initOsint();
 initPadronSearch();
 initProcessRunner();
+initHistory({
+  onOpenDetail: entrada=>{
+    ocultarTodo();
+    arrancarSeguimiento(entrada.id);
+  },
+});
+initNavigation({onLoadHome: cargarHistorial});
 init();

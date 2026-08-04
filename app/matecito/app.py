@@ -26,7 +26,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # --- lógica de validación ---
 from matecito.validadores.telefonos import (validar_telefono, fila_resultado,
@@ -43,6 +43,7 @@ from matecito.nucleo.claves_padron import (armar_claves, consultar_padron,
                            buscar_filas_cuit, buscar_filas_dni)
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
+from matecito.validadores import osint_email
 
 # =====================================================================
 # PADRON BCRA - CONFIGURACION
@@ -72,6 +73,27 @@ PADRON_RUTA_SNAPSHOT = os.environ.get("MATECITO_PADRON_SNAPSHOT", "")
 # los trabajos de TODOS los usuarios conectados.
 LIMITE_BUSQUEDA_MANUAL = 200
 
+# Cada email se consulta una vez por proveedor seleccionado. Este tope evita
+# ráfagas que puedan ser interpretadas como abuso por los proveedores OSINT.
+LIMITE_INTERACCIONES_OSINT = 20_000
+
+
+def _limitar_emails_osint(emails, proveedores, limite=LIMITE_INTERACCIONES_OSINT):
+    """Devuelve los emails que entran en el presupuesto de consultas OSINT."""
+    cantidad_proveedores = max(1, len(proveedores))
+    max_emails = limite // cantidad_proveedores
+    return emails[:max_emails], max_emails
+
+
+def _celda_muestra(valor, largo=80):
+    """Representación corta y segura de una celda para la previsualización."""
+    if valor is None:
+        return None
+    texto = str(valor).replace("\n", " ").replace("\r", " ").strip()
+    if texto == "":
+        return ""
+    return texto if len(texto) <= largo else texto[:largo - 1] + "…"
+
 
 def config_padron():
     """Config de la fuente del padron. Por defecto MODO AUTO: Python abre su
@@ -84,6 +106,8 @@ def config_padron():
         return {"modo": "dblink", "dblink": PADRON_DBLINK, "tabla": PADRON_TABLA}
     # 'auto' (default): credenciales del archivo cifrado en DIR_APP.
     return {"modo": "auto", "dir_base": RAIZ_PROYECTO, "tabla": PADRON_TABLA}
+from matecito.nucleo.previsualizacion import (previsualizar,
+                                             IdentificadorInvalido)
 from matecito.nucleo.normalizador import (normalizar_filas, separar_valores,
                           estadisticas_normalizacion)
 
@@ -579,6 +603,39 @@ from matecito.procesos.registro import (
 
 
 def _tipos_columnas(db_type, proceso):
+    # DEPURACION DE MAILS: dos etapas separadas, cada una en su columna. El
+    # mail original nunca se pierde: es lo que permite revertir y auditar.
+    if proceso == "dep_mails":
+        cols = [
+            ("ID_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
+            ("MAIL_ORIGINAL", "VARCHAR2(320)", "VARCHAR(320)"),
+            ("MAIL_DEPURADO", "VARCHAR2(320)", "VARCHAR(320)"),
+            ("FUE_DEPURADO", "VARCHAR2(2)", "CHAR(2)"),
+            ("CAMBIOS", "VARCHAR2(1000)", "VARCHAR(1000)"),
+            ("FECHA_PROCESO", "DATE", "DATETIME"),
+        ]
+        idx = 1 if db_type == "oracle" else 2
+        return [(c[0], c[idx]) for c in cols]
+
+    # DEPURACION DE TELEFONOS: prefijo y numeracion SEPARADOS, sin veredicto.
+    # ORIGEN_PAIS deja registrado si el codigo de pais venia en el dato o si
+    # se asumio, que es la unica suposicion que hace este proceso.
+    if proceso == "dep_telefonos":
+        cols = [
+            ("ID_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
+            ("TELEFONO_ORIGINAL", "VARCHAR2(200)", "VARCHAR(200)"),
+            ("PREFIJO_PAIS", "VARCHAR2(5)", "VARCHAR(5)"),
+            ("NUMERO_NACIONAL", "VARCHAR2(20)", "VARCHAR(20)"),
+            ("TELEFONO_DEPURADO", "VARCHAR2(30)", "VARCHAR(30)"),
+            ("E164", "VARCHAR2(20)", "VARCHAR(20)"),
+            ("ORIGEN_PAIS", "VARCHAR2(12)", "VARCHAR(12)"),
+            ("FUE_DEPURADO", "VARCHAR2(2)", "CHAR(2)"),
+            ("CAMBIOS", "VARCHAR2(500)", "VARCHAR(500)"),
+            ("FECHA_PROCESO", "DATE", "DATETIME"),
+        ]
+        idx = 1 if db_type == "oracle" else 2
+        return [(c[0], c[idx]) for c in cols]
+
     # COMPARACIÓN: el DDL sale del registro de algoritmos de comparadores.py,
     # no está escrito acá. Agregar o sacar un algoritmo cambia la tabla sin
     # tocar app.py.
@@ -657,6 +714,17 @@ def _tipos_columnas(db_type, proceso):
             ("USUARIO_BAJA", "VARCHAR2(30)", "VARCHAR(30)"),
             ("MOTIVO_BAJA", "VARCHAR2(300)", "VARCHAR(300)"),
             ("FECHA_PROCESO", "DATE", "DATETIME"),
+        ]
+    elif proceso == "osint":
+        cols = [
+            ("ID_ORIGEN", "VARCHAR2(80)", "VARCHAR(80)"),
+            ("MAIL", "VARCHAR2(300)", "VARCHAR(300)"),
+            ("PROVEEDOR", "VARCHAR2(100)", "VARCHAR(100)"),
+            ("CATEGORIA_OSINT", "VARCHAR2(100)", "VARCHAR(100)"),
+            ("ESTADO_OSINT", "VARCHAR2(60)", "VARCHAR(60)"),
+            ("URL_OSINT", "VARCHAR2(1000)", "VARCHAR(1000)"),
+            ("DETALLE_OSINT", "VARCHAR2(2000)", "VARCHAR(2000)"),
+            ("DATOS_OSINT", "CLOB", "TEXT"),
         ]
     else:  # mails
         cols = [
@@ -1035,6 +1103,59 @@ def _job_procesar_db(job, cx, params):
                         nom1, nom2, ahora, id_origen=str(i)))
                 if i % 5000 == 0:
                     job.escribir(f"  …{i}/{len(rows)} comparadas")
+        elif proceso == "dep_mails":
+            # DEPURAR: transforma y no juzga. No hay estado ni motivo de baja
+            # acá a propósito: si el mail sirve o no lo dice la validación,
+            # que es otro proceso.
+            from matecito.validadores.mails import Depurador
+            dep = Depurador()
+            job.escribir("Depurando mails (acentos, 'arroba'/'punto', typos de dominio)…")
+            for i, (id_val, dato) in enumerate(rows, 1):
+                depurado, cambios = dep.depurar(dato)
+                resultados.append({
+                    "ID_ORIGEN": id_val,
+                    "MAIL_ORIGINAL": dato,
+                    "MAIL_DEPURADO": depurado,
+                    "FUE_DEPURADO": "SI" if (cambios and depurado != dato) else "NO",
+                    "CAMBIOS": "; ".join(cambios)[:1000],
+                    "FECHA_PROCESO": ahora,
+                })
+                if i % 5000 == 0:
+                    job.escribir(f"  …{i}/{len(rows)} depurados")
+            tocados = sum(1 for r in resultados if r["FUE_DEPURADO"] == "SI")
+            job.escribir(f"  {tocados} de {len(resultados)} mails fueron corregidos.")
+
+        elif proceso == "dep_telefonos":
+            # Una celda puede traer VARIOS teléfonos ('/' o ';'), así que este
+            # proceso puede devolver más filas que las que leyó. No es un bug:
+            # partir la celda es justamente parte de depurar.
+            from matecito.validadores import telefonos_depurador as _td
+            job.escribir(f"Depurando teléfonos (país por defecto: {pais}; "
+                         f"se separa prefijo y numeración, sin validar)…")
+            for i, (id_val, dato) in enumerate(rows, 1):
+                partes = _td.depurar_celda(dato, pais)
+                if not partes:
+                    partes = [_td.depurar(dato, pais)]
+                for r in partes:
+                    resultados.append({
+                        "ID_ORIGEN": id_val,
+                        "TELEFONO_ORIGINAL": r["TELEFONO_ORIGINAL"],
+                        "PREFIJO_PAIS": r["PREFIJO_PAIS"],
+                        "NUMERO_NACIONAL": r["NUMERO_NACIONAL"],
+                        "TELEFONO_DEPURADO": r["TELEFONO_DEPURADO"],
+                        "E164": r["E164"],
+                        "ORIGEN_PAIS": r["ORIGEN_PAIS"],
+                        "FUE_DEPURADO": "SI" if r["FUE_DEPURADO"] else "NO",
+                        "CAMBIOS": "; ".join(r["CAMBIOS"])[:500],
+                        "FECHA_PROCESO": ahora,
+                    })
+                if i % 5000 == 0:
+                    job.escribir(f"  …{i}/{len(rows)} celdas procesadas")
+            asumidos = sum(1 for r in resultados if r["ORIGEN_PAIS"] == "asumido")
+            job.escribir(f"  {len(rows)} celdas → {len(resultados)} teléfonos. "
+                         f"{asumidos} con código de país asumido (revisar si el "
+                         f"origen mezcla países).")
+
         elif proceso == "telefonos":
             job.escribir(f"Validando teléfonos (país: {pais}, FIJO/MOVIL)…")
             for i, (id_val, dato) in enumerate(rows, 1):
@@ -1042,6 +1163,45 @@ def _job_procesar_db(job, cx, params):
                 resultados.append(fila_resultado(id_val, res))
                 if i % 5000 == 0:
                     job.escribir(f"  …{i}/{len(rows)} validados")
+        elif proceso == "osint":
+            proveedores = params.get("proveedores_osint") or []
+            entradas = [(id_val, str(dato or "").strip()) for id_val, dato in rows]
+            validos = list(dict.fromkeys(
+                email for _, email in entradas if osint_email.email_valido(email)
+            ))
+            limite = params.get("limite_interacciones_osint", LIMITE_INTERACCIONES_OSINT)
+            consultados, max_emails = _limitar_emails_osint(validos, proveedores, limite)
+            no_consultados = set(validos[max_emails:])
+            job.escribir(
+                f"Consultando OSINT para {len(consultados)} mails válidos en "
+                f"{len(proveedores)} proveedores ({len(consultados) * len(proveedores)} "
+                f"interacciones; límite: {limite})…"
+            )
+            if no_consultados:
+                job.escribir(f"⚠ Se omitieron {len(no_consultados)} mails válidos para respetar el límite de consultas.")
+            por_mail = {}
+            for hallazgo in osint_email.scan_many(consultados, proveedores):
+                por_mail.setdefault(hallazgo["MAIL"], []).append(hallazgo)
+            for id_val, email in entradas:
+                hallazgos = por_mail.get(email, [])
+                if hallazgos:
+                    resultados.extend({"ID_ORIGEN": id_val, **h} for h in hallazgos)
+                elif email in no_consultados:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "NO CONSULTADO - LIMITE", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Se omitió para respetar el límite de interacciones OSINT",
+                        "DATOS_OSINT": "{}",
+                    })
+                else:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "MAIL INVALIDO", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Sintaxis de email inválida",
+                        "DATOS_OSINT": "{}",
+                    })
         else:
             if EmailAgent is None:
                 raise RuntimeError(f"No se pudo importar el agente de mails: {EMAIL_AGENT_ERR}")
@@ -1239,6 +1399,30 @@ def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
         fijos = sum(1 for r in resultados if r["TIPO_LINEA"] == "FIJO")
         job.stats = {"total": total, "validos": validos, "bajas": total - validos,
                      "moviles": moviles, "fijos": fijos}
+    elif proceso == "osint":
+        job.stats = {
+            "total": total,
+            "consultados": sum(1 for r in resultados if r.get("PROVEEDOR")),
+            "registrados": sum(
+                1 for r in resultados if r.get("ESTADO_OSINT") == "Registered"
+            ),
+            "errores": sum(
+                1 for r in resultados if r.get("ESTADO_OSINT") == "Error"
+            ),
+        }
+    elif proceso in ("dep_mails", "dep_telefonos"):
+        # DEPURACION: no hay bajas ni estados. Lo único que se cuenta es
+        # cuántos datos se tocaron y cuántos quedaron igual. Un dato que la
+        # depuración no cambió NO es un dato malo: es un dato que ya estaba
+        # bien escrito.
+        tocados = sum(1 for r in resultados if r.get("FUE_DEPURADO") == "SI")
+        job.stats = {"total": total, "depurados": tocados,
+                     "sin_cambios": total - tocados}
+        if proceso == "dep_telefonos":
+            job.stats["pais_asumido"] = sum(
+                1 for r in resultados if r.get("ORIGEN_PAIS") == "asumido")
+            job.stats["sin_numero"] = sum(
+                1 for r in resultados if not r.get("E164"))
     else:
         bajas = sum(1 for r in resultados if r["ESTADO"] == "BAJA")
         mods = sum(1 for r in resultados if r["ESTADO"] == "MODIFICADO")
@@ -1259,7 +1443,8 @@ def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
 def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                           nombre_original, pais, delim=",",
                           umbral=UMBRAL_COINCIDENTE_DEFAULT,
-                          tipo_busqueda="cuit"):
+                          tipo_busqueda="cuit", proveedores_osint=None,
+                          limite_interacciones_osint=LIMITE_INTERACCIONES_OSINT):
     """Procesa un archivo plano (CSV/Excel ya leído a filas) y genera el CSV
     de salida automáticamente."""
     try:
@@ -1274,6 +1459,10 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
             if EmailAgent is None:
                 raise RuntimeError(f"No se pudo importar el agente de mails: {EMAIL_AGENT_ERR}")
             agente = EmailAgent(dir_listas=DIR_LISTAS)
+        if proceso == "osint":
+            proveedores_osint = proveedores_osint or []
+            if not proveedores_osint:
+                raise RuntimeError("Elegí al menos un proveedor OSINT.")
 
         # --- Procesos que consultan el PADRÓN ---
         # Mismo enfoque que el flujo de base de datos: Python abre su propia
@@ -1368,6 +1557,8 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                     continue
                 id_val = fila[idx_id] if (idx_id is not None and idx_id < len(fila)) else i
                 dato = fila[idx_dato] if idx_dato < len(fila) else ""
+                if proceso == "osint":
+                    continue
                 if proceso == "denominacion":
                     nom2 = fila[idx_dato] if idx_dato < len(fila) else ""
                     resultados.append(fila_resultado_denominacion(id_val, nom2, ahora, umbral=umbral))
@@ -1384,6 +1575,52 @@ def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                     resultados.append(_procesar_fila_mail(agente, id_val, dato, ahora))
                 if i % 5000 == 0:
                     job.escribir(f"  …{i}/{len(filas)}")
+
+        if proceso == "osint":
+            entradas = []
+            for i, fila in enumerate(filas, 1):
+                if not fila:
+                    continue
+                id_val = fila[idx_id] if (idx_id is not None and idx_id < len(fila)) else i
+                email = str(fila[idx_dato] if idx_dato < len(fila) else "").strip()
+                entradas.append((id_val, email))
+            validos = list(dict.fromkeys(
+                email for _, email in entradas if osint_email.email_valido(email)
+            ))
+            consultados, max_emails = _limitar_emails_osint(
+                validos, proveedores_osint, limite_interacciones_osint)
+            no_consultados = set(validos[max_emails:])
+            job.escribir(
+                f"Consultando OSINT para {len(consultados)} mails válidos en "
+                f"{len(proveedores_osint)} proveedores ({len(consultados) * len(proveedores_osint)} "
+                f"interacciones; límite: {limite_interacciones_osint})…"
+            )
+            if no_consultados:
+                job.escribir(f"⚠ Se omitieron {len(no_consultados)} mails válidos para respetar el límite de consultas.")
+            por_mail = {}
+            for hallazgo in osint_email.scan_many(consultados, proveedores_osint):
+                por_mail.setdefault(hallazgo["MAIL"], []).append(hallazgo)
+            resultados = []
+            for id_val, email in entradas:
+                hallazgos = por_mail.get(email, [])
+                if hallazgos:
+                    resultados.extend({"ID_ORIGEN": id_val, **h} for h in hallazgos)
+                elif email in no_consultados:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "NO CONSULTADO - LIMITE", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Se omitió para respetar el límite de interacciones OSINT",
+                        "DATOS_OSINT": "{}",
+                    })
+                else:
+                    resultados.append({
+                        "ID_ORIGEN": id_val, "MAIL": email,
+                        "PROVEEDOR": "", "CATEGORIA_OSINT": "",
+                        "ESTADO_OSINT": "MAIL INVALIDO", "URL_OSINT": "",
+                        "DETALLE_OSINT": "Sintaxis de email inválida",
+                        "DATOS_OSINT": "{}",
+                    })
 
         base = os.path.splitext(os.path.basename(nombre_original))[0]
         nombre_base = f"{sanitizar_identificador(base)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1480,6 +1717,9 @@ class ProcesoDBRequest(BaseModel):
     cliente: str = ""
     pais: str = "AR"
     umbral: float = UMBRAL_COINCIDENTE_DEFAULT   # denominación y validación de CUIT (0-100)
+    proveedores_osint: list[str] = Field(default_factory=list)
+    limite_interacciones_osint: int = Field(LIMITE_INTERACCIONES_OSINT, ge=1,
+                                             le=LIMITE_INTERACCIONES_OSINT)
 
 
 class NormalizacionDBRequest(BaseModel):
@@ -1521,6 +1761,14 @@ def estado(request: Request):
         "agente_mails_error": EMAIL_AGENT_ERR if EmailAgent is None else "",
         "paises_telefono": {k: v["nombre"] for k, v in PAISES_TELEFONO.items()},
     }
+
+
+@app.get("/api/osint/proveedores")
+def listar_proveedores_osint():
+    try:
+        return {"ok": True, "proveedores": osint_email.proveedores_disponibles()}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/api/usuario")
@@ -1593,6 +1841,45 @@ def api_columnas(sid: str, esquema: str, tabla: str):
         raise HTTPException(400, f"No se pudieron listar las columnas: {e}")
 
 
+@app.get("/api/conexion/{sid}/muestra")
+def api_muestra(sid: str, esquema: str, tabla: str, columnas: str = "",
+                limite: int = 10):
+    """
+    Primeras N filas de la tabla elegida, para confirmar ANTES de ejecutar
+    que es la tabla y las columnas correctas.
+
+    Es de SOLO LECTURA: un SELECT acotado, sin transacción y sin COUNT(*).
+    El COUNT se omite a propósito — sobre una tabla FEDERATED o de decenas de
+    millones de filas puede tardar minutos, y una confirmación que tarda deja
+    de usarse.
+
+    `columnas` es una lista separada por comas. Vacía = todas.
+    """
+    cx = CONEXIONES.get(sid)
+    if not cx:
+        raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
+    cols = [c.strip() for c in columnas.split(",") if c.strip()] or None
+    destino = f"{esquema}.{tabla}" if esquema else tabla
+    try:
+        vista = previsualizar(cx, destino, columnas=cols,
+                              limite=max(1, min(limite, 50)))
+    except IdentificadorInvalido as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"No se pudo leer la muestra de {destino}: {e}")
+
+    # Las celdas se recortan del lado del servidor: una columna CLOB puede
+    # traer megabytes por fila y no tiene sentido mandarlos para mostrar 10
+    # filas en una tabla.
+    filas = [[_celda_muestra(v) for v in fila] for fila in vista["filas"]]
+    return {
+        "columnas": vista["columnas"],
+        "filas": filas,
+        "cantidad": vista["cantidad"],
+        "diagnostico": vista["diagnostico"],
+    }
+
+
 @app.post("/api/procesos/db")
 def procesar_db(req: ProcesoDBRequest):
     cx = CONEXIONES.get(req.session_id)
@@ -1602,6 +1889,20 @@ def procesar_db(req: ProcesoDBRequest):
     # tupla escrita a mano que hay que acordarse de actualizar.
     if not proceso_valido(req.proceso):
         raise HTTPException(400, "Proceso no disponible todavía.")
+    if req.proceso == "osint":
+        if not req.col_dato:
+            raise HTTPException(400, "Elegí la columna que contiene el mail.")
+        if not req.proveedores_osint:
+            raise HTTPException(400, "Elegí al menos un proveedor OSINT.")
+        try:
+            disponibles = {p["id"] for p in osint_email.proveedores_disponibles()}
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        desconocidos = sorted(set(req.proveedores_osint) - disponibles)
+        if desconocidos:
+            raise HTTPException(
+                400, f"Proveedores OSINT no disponibles: {', '.join(desconocidos)}"
+            )
     if req.proceso == "cuit" and not (req.col_id and req.col_dato):
         raise HTTPException(400, "Elegí la columna del CUIT/DNI y la de la denominación.")
     if req.proceso == "cuit" and not (0 <= req.umbral <= 100):
@@ -1732,7 +2033,7 @@ def _detectar_columnas(encabezado, filas, proceso):
         if len(idxs) < 2:
             idxs = [0, 1]
         return idxs[0], idxs[1]  # (columna 1 = origen, columna 2 = a validar)
-    claves_dato = ("mail", "correo", "email") if proceso == "mails" else \
+    claves_dato = ("mail", "correo", "email") if proceso in ("mails", "osint") else \
                   ("tel", "cel", "movil", "móvil", "fono", "whatsapp")
     idx_dato, idx_id = None, None
     if encabezado:
@@ -1746,7 +2047,7 @@ def _detectar_columnas(encabezado, filas, proceso):
         # sin encabezado útil: para mails, la columna con '@'; para teléfonos,
         # la columna con más dígitos
         fila0 = filas[0]
-        if proceso == "mails":
+        if proceso in ("mails", "osint"):
             for i, c in enumerate(fila0):
                 if "@" in str(c):
                     idx_dato = i
@@ -1844,11 +2145,68 @@ async def normalizar_archivo_endpoint(request: Request,
     return {"ok": True, "job_id": job.id}
 
 
+@app.post("/api/archivo/muestra")
+async def api_muestra_archivo(archivo: UploadFile = File(...), limite: int = Form(10)):
+    """
+    Primeras N filas de un archivo plano, SIN guardarlo ni procesarlo.
+
+    El flujo por archivo hoy solo lee el contenido al ejecutar, así que un
+    encabezado mal detectado o una columna equivocada se descubren cuando el
+    proceso ya corrió. Esto lo adelanta.
+
+    El archivo NO se persiste: se lee en memoria y se descarta. Contiene datos
+    personales y no tiene por qué quedar en disco para mostrar 10 filas.
+    """
+    contenido = await archivo.read()
+    if not contenido:
+        raise HTTPException(400, "El archivo está vacío.")
+    try:
+        encabezado, filas, _ = _leer_archivo_plano(archivo.filename or "", contenido)
+    except Exception as e:
+        raise HTTPException(400, f"No se pudo leer el archivo: {e}")
+
+    if not filas:
+        return {"columnas": [], "filas": [], "cantidad": 0, "total": 0,
+                "diagnostico": []}
+
+    if encabezado:
+        columnas = [str(c) for c in encabezado]
+        datos = filas
+    else:
+        # Sin encabezado se numeran las columnas: es preferible a inventar
+        # nombres, que daría la impresión de que el archivo los trae.
+        columnas = [f"col{i + 1}" for i in range(len(filas[0]))]
+        datos = filas
+
+    n = max(1, min(limite, 50))
+    muestra = [[_celda_muestra(v) for v in f] for f in datos[:n]]
+
+    # Mismo diagnóstico que la previsualización por base, para que las dos
+    # pantallas se lean igual.
+    diagnostico = []
+    for i, nombre in enumerate(columnas):
+        valores = [f[i] if i < len(f) else None for f in datos[:n]]
+        textos = [str(v) for v in valores if v is not None and str(v).strip()]
+        diagnostico.append({
+            "columna": nombre,
+            "nulos": sum(1 for v in valores if v is None),
+            "vacios": sum(1 for v in valores
+                          if v is not None and str(v).strip() == ""),
+            "distintos": len(set(textos)),
+            "largo_min": min((len(t) for t in textos), default=0),
+            "largo_max": max((len(t) for t in textos), default=0),
+        })
+    return {"columnas": columnas, "filas": muestra, "cantidad": len(muestra),
+            "total": len(datos), "diagnostico": diagnostico}
+
+
 @app.post("/api/procesos/archivo")
 async def procesar_archivo(request: Request,
                            proceso: str = Form(...), pais: str = Form("AR"),
                            umbral: float = Form(UMBRAL_COINCIDENTE_DEFAULT),
                            tipo_busqueda: str = Form("cuit"),
+                           proveedores_osint: str = Form(""),
+                           limite_interacciones_osint: int = Form(LIMITE_INTERACCIONES_OSINT),
                            archivo: UploadFile = File(...)):
     # La lista de procesos válidos sale del registro PROCESOS (igual que el
     # endpoint de base de datos), no de una tupla escrita a mano.
@@ -1856,11 +2214,28 @@ async def procesar_archivo(request: Request,
         raise HTTPException(400, "Proceso no disponible todavía.")
     if proceso in ("denominacion", "cuit") and not (0 <= umbral <= 100):
         raise HTTPException(400, "El umbral de coincidencia debe estar entre 0 y 100.")
+    if proceso == "osint" and not (1 <= limite_interacciones_osint <= LIMITE_INTERACCIONES_OSINT):
+        raise HTTPException(400, f"El límite OSINT debe estar entre 1 y {LIMITE_INTERACCIONES_OSINT:,} interacciones.")
     contenido = await archivo.read()
     encabezado, filas, delim = _leer_archivo_plano(archivo.filename, contenido)
     if not filas:
         raise HTTPException(400, "El archivo está vacío o no se pudo leer.")
     idx_id, idx_dato = _detectar_columnas(encabezado, filas, proceso)
+    proveedores = [p.strip() for p in proveedores_osint.split(",") if p.strip()]
+    if proceso == "osint" and not proveedores:
+        raise HTTPException(400, "Elegí al menos un proveedor OSINT.")
+    if proveedores and proceso != "osint":
+        raise HTTPException(400, "Los proveedores sólo aplican al proceso OSINT.")
+    if proveedores:
+        try:
+            disponibles = {p["id"] for p in osint_email.proveedores_disponibles()}
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        desconocidos = sorted(set(proveedores) - disponibles)
+        if desconocidos:
+            raise HTTPException(
+                400, f"Proveedores OSINT no disponibles: {', '.join(desconocidos)}"
+            )
     job = Job(proceso, origen="archivo", descripcion=archivo.filename,
               usuario=usuario_de_sesion(request))
     JOBS[job.id] = job
@@ -1872,7 +2247,7 @@ async def procesar_archivo(request: Request,
     t = threading.Thread(target=_job_procesar_archivo,
                          args=(job, proceso, filas, encabezado, idx_id, idx_dato,
                                archivo.filename, pais, delim, umbral,
-                               tipo_busqueda), daemon=True)
+                               tipo_busqueda, proveedores, limite_interacciones_osint), daemon=True)
     t.start()
     return {"ok": True, "job_id": job.id}
 
@@ -1999,6 +2374,12 @@ def descargar_csv(job_id: str):
     return FileResponse(path, media_type="text/csv",
                         filename=os.path.basename(path))
 
+
+# Endpoints del cruce de redes sociales. Viven en su propio módulo para que
+# agregar endpoints no obligue a editar este archivo (ver api/cruce_redes_api).
+from matecito.api import cruce_redes_api
+cruce_redes_api.montar(app, {"conexiones": CONEXIONES, "jobs": JOBS,
+                             "job_clase": Job, "dir_salidas": DIR_SALIDAS})
 
 app.mount("/static", StaticFiles(directory=DIR_STATIC), name="static")
 

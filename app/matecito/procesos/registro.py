@@ -23,29 +23,62 @@ CAMPOS
 """
 
 PROCESOS = {
+    "osint": {
+        "categoria": "validacion",
+        "cols_origen": 1, "padron": False, "umbral": False,
+        "etiqueta": "OSINT de mails",
+    },
     "mails": {
+        "categoria": "validacion",
         "cols_origen": 1, "padron": False, "umbral": False,
         "etiqueta": "Validación de mails",
     },
     "telefonos": {
+        "categoria": "validacion",
         "cols_origen": 1, "padron": False, "umbral": False,
         "etiqueta": "Validación de teléfonos",
     },
     "cuitificacion": {
+        "categoria": "busqueda",
         "cols_origen": 1, "padron": True, "umbral": False,
-        "etiqueta": "Cuitificación",
+        "etiqueta": "CUIT/DNI en lote → datos del padrón BCRA",
     },
     "cuit": {
         "cols_origen": 2, "padron": True, "umbral": True,
-        "etiqueta": "Validación de denominación",
+        "categoria": "validacion",
+        "etiqueta": "Denominación contra CUIT (BCRA)",
     },
     "denominacion": {
+        "categoria": "busqueda",
         "cols_origen": 2, "padron": False, "umbral": True,
         "etiqueta": "Comparación de denominaciones (2 columnas)",
+            "oculto": True,   # unificado en cruce_redes
     },
     "comparacion": {
+        "categoria": "busqueda",
         "cols_origen": 2, "padron": False, "umbral": False,
         "etiqueta": "REDES SOCIALES · Comparación de algoritmos",
+            "oculto": True,   # unificado en cruce_redes
+    },
+    # Origen ARCHIVO en vez de columnas de una tabla: por eso cols_origen=0.
+    # La pantalla pide el csv/xlsx primero y recién después las credenciales
+    # y la selección esquema -> tabla -> columna del lado base.
+    # --- DEPURACION: transforma, no juzga. Ninguno da de baja nada. ---
+    "dep_mails": {
+        "cols_origen": 1, "padron": False, "umbral": False,
+        "categoria": "depuracion",
+        "etiqueta": "Depurar mails (acentos, typos, arroba)",
+    },
+    "dep_telefonos": {
+        "cols_origen": 1, "padron": False, "umbral": False,
+        "categoria": "depuracion",
+        "etiqueta": "Depurar teléfonos (símbolos, prefijo, +54)",
+    },
+    "cruce_redes": {
+        "categoria": "busqueda",
+        "cols_origen": 0, "padron": False, "umbral": True,
+        "origen": "archivo", "destino": "tabla",
+        "etiqueta": "Cruce de denominaciones (archivo o 2 columnas)",
     },
 }
 
@@ -64,3 +97,32 @@ def proceso_necesita_dos_columnas(nombre):
 
 def etiqueta(nombre):
     return PROCESOS.get(nombre, {}).get("etiqueta", nombre)
+
+
+# Orden en que las categorías se muestran en pantalla. Es el orden del
+# trabajo real: primero se normaliza el archivo, después se depura el dato,
+# después se lo juzga, y la búsqueda es consulta pura que no modifica nada.
+CATEGORIAS = [
+    ("normalizacion", "Normalización"),
+    ("depuracion",    "Depuración"),
+    ("validacion",    "Validación"),
+    ("busqueda",      "Búsqueda"),
+]
+
+
+def procesos_de(categoria, incluir_ocultos=False):
+    """
+    [(clave, etiqueta)] de una categoría, en el orden del registro.
+
+    Los marcados "oculto" no se muestran en el menú pero SIGUEN despachando:
+    son procesos que quedaron unificados en otro y se dejan vivos para no
+    romper corridas o llamadas existentes. Se pueden ver con
+    incluir_ocultos=True.
+    """
+    return [(k, v["etiqueta"]) for k, v in PROCESOS.items()
+            if v.get("categoria") == categoria
+            and (incluir_ocultos or not v.get("oculto"))]
+
+
+def categoria_de(nombre):
+    return PROCESOS.get(nombre, {}).get("categoria")

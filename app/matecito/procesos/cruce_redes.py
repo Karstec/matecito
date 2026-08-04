@@ -27,6 +27,8 @@ MariaDB (el caso de hoy), Oracle y SQL Server. La escritura usa
 nucleo/lotes.EscritorLotes, que ya trae el COUNT de verificación y el
 ROLLBACK si no cuadra.
 """
+import csv
+import os
 from datetime import datetime
 
 from ..nucleo import dialecto
@@ -328,18 +330,41 @@ def correr(cx, config, job=None, log=print):
             filas_archivo, indice, docs, col_denom_archivo, respaldos,
             columnas_extra, col_id_archivo, candidatos_por_fila, stats, log)
 
-    lote = []
-    for fila in generador:
-        lote.append(fila)
-        if len(lote) >= LOTE_INSERT:
+    # El CSV se escribe A MEDIDA que se generan las filas, en el mismo
+    # recorrido que alimenta los lotes del INSERT. Acumular todo en una lista
+    # para volcarla al final duplicaría en memoria una tabla que puede tener
+    # cientos de miles de filas, y el generador existe justamente para no
+    # hacer eso.
+    ruta_csv = config.get('ruta_csv')
+    archivo_csv = escritor_csv = None
+    if ruta_csv:
+        os.makedirs(os.path.dirname(ruta_csv) or '.', exist_ok=True)
+        archivo_csv = open(ruta_csv, 'w', encoding='utf-8-sig', newline='')
+        escritor_csv = csv.DictWriter(archivo_csv, fieldnames=nombres,
+                                      extrasaction='ignore')
+        escritor_csv.writeheader()
+
+    try:
+        lote = []
+        for fila in generador:
+            lote.append(fila)
+            if escritor_csv:
+                escritor_csv.writerow(fila)
+            if len(lote) >= LOTE_INSERT:
+                escritor.insertar(lote)
+                stats['insertadas'] += len(lote)
+                lote = []
+        if lote:
             escritor.insertar(lote)
             stats['insertadas'] += len(lote)
-            lote = []
-    if lote:
-        escritor.insertar(lote)
-        stats['insertadas'] += len(lote)
+    finally:
+        if archivo_csv:
+            archivo_csv.close()
 
     escritor.cerrar_ok(stats['insertadas'])
+    if ruta_csv:
+        stats['csv'] = ruta_csv
+        log(f"CSV de resultado: {os.path.basename(ruta_csv)}")
 
     log("===== RESUMEN DEL CRUCE =====")
     log(f"Filas de archivo      : {stats['filas_archivo']}")

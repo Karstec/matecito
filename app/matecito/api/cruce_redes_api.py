@@ -40,11 +40,13 @@ def montar(app, ctx):
         conexiones : dict de sesiones de conexión abiertas
         jobs       : dict de jobs en curso
         job_clase  : la clase Job
+        dir_salidas: carpeta donde se dejan los CSV descargables
     """
     router = APIRouter()
     CONEXIONES = ctx['conexiones']
     JOBS = ctx['jobs']
     Job = ctx['job_clase']
+    DIR_SALIDAS = ctx.get('dir_salidas', '.')
 
     @router.get("/api/cruce-redes/columnas-archivo")
     def columnas_archivo(ruta: str, limite: int = 10):
@@ -178,6 +180,11 @@ def montar(app, ctx):
                   usuario=usuario, cliente=cliente)
         JOBS[job.id] = job
 
+        # Mismo destino y mismo nombre que el resto de los procesos, para que
+        # el boton de descarga y el historial funcionen sin ningun caso especial.
+        config['ruta_csv'] = os.path.join(
+            DIR_SALIDAS, f"RESULTADO_{job.id}.csv")
+
         def correr():
             estado = "OK"
             try:
@@ -185,6 +192,8 @@ def montar(app, ctx):
                     cx, config, job=job, log=job.escribir)
                 job.tabla_resultado = tabla
                 job.stats = stats
+                if stats.get('csv') and os.path.isfile(stats['csv']):
+                    job.csv_path = stats['csv']
             except Exception as e:
                 job.error = str(e)
                 estado = "ERROR"

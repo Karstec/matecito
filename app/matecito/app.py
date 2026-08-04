@@ -2324,7 +2324,7 @@ def descargar_csv(job_id: str):
 # agregar endpoints no obligue a editar este archivo (ver api/cruce_redes_api).
 from matecito.api import cruce_redes_api
 cruce_redes_api.montar(app, {"conexiones": CONEXIONES, "jobs": JOBS,
-                             "job_clase": Job})
+                             "job_clase": Job, "dir_salidas": DIR_SALIDAS})
 
 app.mount("/static", StaticFiles(directory=DIR_STATIC), name="static")
 

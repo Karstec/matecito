@@ -215,6 +215,9 @@
   .minitabla .nulo{color:#b0b6bb; font-style:italic;}
   .miniwrap{overflow:auto; max-height:190px; border:1px solid #eceff1; border-radius:4px;}
   .minicab{font-size:12px; font-weight:600; color:#1f4e78; margin-bottom:4px;}
+  .gridauto{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px;}
+  .filaflex{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;}
+  .filaflex input[type=file]{flex:1 1 220px; min-width:0;}
   .oculto{display:none !important;}
 
   /* modal */
@@ -312,6 +315,87 @@
         </div>
         <div class="fila-botones">
           <button class="btn btn-gris" id="btnRefrescarHist">Actualizar</button>
+        </div>
+      </div>
+
+      <!-- Cruce de denominaciones: misma estructura de carta que el resto de
+           los procesos, para heredar ancho, responsive y scroll del contenedor
+           en lugar de vivir en un modal de ancho fijo. -->
+      <div class="carta oculto" id="cartaCruce">
+        <h2>Cruce de denominaciones</h2>
+        <div class="cuerpo">
+          <p class="nota">Compara la columna de nombre de un archivo de contactos contra
+            una columna de nombre de la base, con los 6 algoritmos. Genera una tabla nueva
+            y un CSV descargable; la tabla origen no se toca.</p>
+
+          <div class="pasoc" id="pasoArchivo">
+            <b class="pasotit"><span class="pasonum">1</span> Archivo de contactos</b>
+            <div class="filaflex">
+              <input type="file" id="cruceArchivo" accept=".csv,.xlsx,.xlsm,.txt">
+              <button class="btn btn-gris" id="btnCruceSubir">Leer columnas</button>
+            </div>
+            <div id="cruceInfoArchivo" class="pasoinfo"></div>
+            <div id="cruceBloqueCols" class="oculto" style="margin-top:10px">
+              <div class="gridauto">
+                <label>Nombre a comparar<select id="cruceColNombre"></select></label>
+                <label>Identificador de fila<select id="cruceColId"></select></label>
+                <label>Usuario / perfil<select id="cruceColUser"></select></label>
+                <label>Teléfono (se arrastra)<select id="cruceColTel"></select></label>
+                <label>Mail (se arrastra)<select id="cruceColMail"></select></label>
+              </div>
+              <p class="pasoayuda">El usuario, el teléfono y el mail viajan a la tabla
+                resultante pero no participan de la comparación ni del desempate.</p>
+            </div>
+          </div>
+
+          <div class="pasoc bloqueado" id="pasoBase">
+            <b class="pasotit"><span class="pasonum">2</span> Base contra la que comparar</b>
+            <p class="pasoayuda">Puede ser cualquier padrón, no solo el BCRA. Los datos no se guardan.</p>
+            <div id="cruceFormConexion">
+              <div class="gridauto" style="margin-top:8px">
+                <label>Motor<select id="cxDbType">
+                  <option value="mariadb">MariaDB / MySQL</option>
+                  <option value="oracle">Oracle</option>
+                </select></label>
+                <label>Host<input id="cxHost" autocomplete="off"></label>
+                <label>Puerto<input id="cxPort" value="3306" autocomplete="off"></label>
+                <label>Usuario<input id="cxUser" autocomplete="off"></label>
+                <label>Contraseña<input id="cxPass" type="password" autocomplete="new-password"></label>
+                <label>Base / service<input id="cxDbname" autocomplete="off"></label>
+              </div>
+              <div class="filaflex">
+                <button class="btn btn-gris" id="btnCruceConectar">Conectar</button>
+                <button class="btn btn-gris" id="btnCruceUsarActual">Usar la conexión abierta</button>
+                <span id="cruceMsgConexion" class="pasoinfo"></span>
+              </div>
+            </div>
+            <div id="cruceBloqueSeleccion" class="oculto" style="margin-top:10px">
+              <div class="gridauto">
+                <label>Esquema<select id="cruceEsquema"></select></label>
+                <label>Tabla<select id="cruceTabla"></select></label>
+                <label>Identificador<select id="cruceColIdBase"></select></label>
+                <label>Columna del nombre<select id="cruceColNombreBase"></select></label>
+                <label>Documento (DNI/RUT/CUIT)<select id="cruceColDoc"></select></label>
+                <label>Candidatos por fila<input type="number" id="cruceCandidatos" value="5" min="1" max="20"></label>
+              </div>
+              <label style="display:block; margin-top:10px">Filtro opcional (WHERE)
+                <input id="cruceWhere" placeholder="ConEstado = 'A'" autocomplete="off"></label>
+            </div>
+          </div>
+
+          <div class="pasoc bloqueado" id="pasoPrev">
+            <b class="pasotit"><span class="pasonum">3</span> Confirmar los datos</b>
+            <p class="pasoayuda">Primeras 10 filas de cada lado. Es el momento de detectar
+              que la tabla o la columna elegida no es la que se busca.</p>
+            <button class="btn btn-gris" id="btnCrucePrev" style="margin-top:6px">Ver primeras filas</button>
+            <div id="crucePrevArchivo" style="margin-top:10px"></div>
+            <div id="crucePrevBase" style="margin-top:10px"></div>
+          </div>
+
+          <div id="cruceAviso" class="pasoinfo"></div>
+        </div>
+        <div class="fila-botones">
+          <button class="btn btn-verde" id="btnCruceEjecutar" disabled>Ejecutar cruce</button>
         </div>
       </div>
 
@@ -575,90 +659,6 @@
   </div>
 </div>
 
-<div class="velo oculto" id="veloCruce">
-  <div class="modal" style="max-width:940px">
-    <h3>Cruce de nombres contra la base</h3>
-    <p style="font-size:13px; color:var(--mudo); margin:6px 0 14px">
-      Compara la columna de nombre de un archivo de contactos contra una columna de nombre
-      de la base, con los 6 algoritmos. Genera una tabla nueva; la tabla origen no se toca.
-    </p>
-
-    <!-- PASO 1 -->
-    <div class="pasoc" id="pasoArchivo">
-      <b class="pasotit"><span class="pasonum">1</span> Archivo de contactos</b>
-      <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
-        <input type="file" id="cruceArchivo" accept=".csv,.xlsx,.xlsm,.txt" style="flex:1">
-        <button class="btn btn-gris" id="btnCruceSubir">Leer columnas</button>
-      </div>
-      <div id="cruceInfoArchivo" class="pasoinfo"></div>
-      <div id="cruceBloqueCols" class="oculto" style="margin-top:10px">
-        <div class="grid2">
-          <label>Nombre a comparar<select id="cruceColNombre"></select></label>
-          <label>Identificador de fila<select id="cruceColId"></select></label>
-          <label>Usuario / perfil<select id="cruceColUser"></select></label>
-          <label>Teléfono (se arrastra)<select id="cruceColTel"></select></label>
-          <label>Mail (se arrastra)<select id="cruceColMail"></select></label>
-        </div>
-        <p class="pasoayuda">El usuario, el teléfono y el mail viajan a la tabla resultante
-          pero no participan de la comparación ni del desempate.</p>
-      </div>
-    </div>
-
-    <!-- PASO 2 -->
-    <div class="pasoc bloqueado" id="pasoBase">
-      <b class="pasotit"><span class="pasonum">2</span> Base contra la que comparar</b>
-      <p class="pasoayuda">Puede ser cualquier padrón, no solo el BCRA. Los datos no se guardan.</p>
-      <div id="cruceYaConectado" class="oculto pasoinfo"></div>
-      <div id="cruceFormConexion">
-        <div class="grid3" style="margin-top:8px">
-          <label>Motor<select id="cxDbType">
-            <option value="mariadb">MariaDB / MySQL</option>
-            <option value="oracle">Oracle</option>
-          </select></label>
-          <label>Host<input id="cxHost" autocomplete="off"></label>
-          <label>Puerto<input id="cxPort" value="3306" autocomplete="off"></label>
-          <label>Usuario<input id="cxUser" autocomplete="off"></label>
-          <label>Contraseña<input id="cxPass" type="password" autocomplete="new-password"></label>
-          <label>Base / service<input id="cxDbname" autocomplete="off"></label>
-        </div>
-        <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
-          <button class="btn btn-gris" id="btnCruceConectar">Conectar</button>
-          <button class="btn btn-gris" id="btnCruceUsarActual">Usar la conexión abierta</button>
-          <span id="cruceMsgConexion" style="font-size:12px"></span>
-        </div>
-      </div>
-      <div id="cruceBloqueSeleccion" class="oculto" style="margin-top:10px">
-        <div class="grid3">
-          <label>Esquema<select id="cruceEsquema"></select></label>
-          <label>Tabla<select id="cruceTabla"></select></label>
-          <label>Identificador<select id="cruceColIdBase"></select></label>
-          <label>Columna del nombre<select id="cruceColNombreBase"></select></label>
-          <label>Documento (DNI/RUT/CUIT)<select id="cruceColDoc"></select></label>
-          <label>Candidatos por fila<input type="number" id="cruceCandidatos" value="5" min="1" max="20"></label>
-        </div>
-        <label style="display:block; margin-top:10px">Filtro opcional (WHERE)
-          <input id="cruceWhere" placeholder="ConEstado = 'A'" autocomplete="off"></label>
-      </div>
-    </div>
-
-    <!-- PASO 3 -->
-    <div class="pasoc bloqueado" id="pasoPrev">
-      <b class="pasotit"><span class="pasonum">3</span> Confirmar los datos</b>
-      <p class="pasoayuda">Primeras 10 filas de cada lado. Es el momento de detectar que la
-        tabla o la columna elegida no es la que se busca.</p>
-      <button class="btn btn-gris" id="btnCrucePrev" style="margin-top:6px">Ver primeras filas</button>
-      <div id="crucePrevArchivo" style="margin-top:10px"></div>
-      <div id="crucePrevBase" style="margin-top:10px"></div>
-    </div>
-
-    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px">
-      <button class="btn btn-gris" id="btnCerrarCruce">Cerrar</button>
-      <button class="btn btn-verde" id="btnCruceEjecutar" disabled>Ejecutar cruce</button>
-    </div>
-    <div id="cruceAviso" style="font-size:13px; margin-top:10px"></div>
-  </div>
-</div>
-
 <div class="velo oculto" id="veloBuscador">
   <div class="modal" style="max-width:820px">
     <h3>Buscar CUIT / DNI en el padrón</h3>
@@ -820,7 +820,8 @@ const TITULOS = {mails:"Validación de mails (reglas)", osint:"Validación de ma
 
 function ocultarTodo(){
   ["cartaOrigen","cartaConexion","cartaSeleccion","cartaGeneracion",
-   "cartaArchivo","cartaArchivoNorm","cartaProgreso","cartaFuturo","cartaHistorial"]
+   "cartaArchivo","cartaArchivoNorm","cartaProgreso","cartaFuturo","cartaHistorial",
+   "cartaCruce"]
    .forEach(id=>$(id).classList.add("oculto"));
 }
 
@@ -1272,13 +1273,20 @@ function tablaMini(cont, columnas, filas, titulo){
 }
 
 $("btnAbrirCruce").onclick = ()=>{
-  $("veloCruce").classList.remove("oculto");
+  // Carta inline, igual que el resto de los procesos: hereda el ancho, el
+  // responsive y el scroll del contenedor en vez de vivir en un modal fijo.
+  detenerPoll();
+  ocultarTodo();
+  document.querySelectorAll(".navbtn").forEach(x=>x.classList.remove("activo"));
+  $("btnAbrirCruce").classList.add("activo");
+  $("tituloProceso").textContent = "Cruce de denominaciones";
+  $("chipEstado").textContent = "configurando";
+  $("cartaCruce").classList.remove("oculto");
   $("cruceAviso").textContent = "";
   // Si ya hay una conexión abierta se ofrece reusarla, pero no se asume.
   $("btnCruceUsarActual").style.display = estado.session ? "" : "none";
   revisarCruceListo();
 };
-$("btnCerrarCruce").onclick = ()=>$("veloCruce").classList.add("oculto");
 
 /* --- PASO 1: archivo --- */
 $("btnCruceSubir").onclick = async ()=>{
@@ -1465,7 +1473,7 @@ $("btnCruceEjecutar").onclick = async ()=>{
     // El temporal se borra en el servidor al terminar: otra corrida necesita
     // volver a subir el archivo.
     cruce.token = null; cruce.muestraOk = false;
-    $("veloCruce").classList.add("oculto");
+    ocultarTodo();
     arrancarSeguimiento(d.job_id);
   }catch(e){
     $("cruceAviso").innerHTML = `<span style="color:#c05">Error: ${e.message}</span>`;

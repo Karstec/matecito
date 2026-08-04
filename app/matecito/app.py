@@ -59,7 +59,6 @@ from matecito.nucleo.archivos import (
     leer_archivo,
 )
 from matecito.nucleo.persistencia import (
-    cargar_historial,
     cargar_presets,
     guardar_presets,
     guardar_usuario,
@@ -89,6 +88,12 @@ from matecito.nucleo.correo import (
     EmailAgent,
     limitar_emails_osint as _limitar_emails_osint,
     procesar_fila_mail as _procesar_fila_mail,
+)
+from matecito.nucleo.seguimiento import (
+    entrada_historial as _entrada_historial,
+    listar_procesos,
+    obtener_progreso,
+    resolver_csv,
 )
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
@@ -1326,66 +1331,21 @@ def padron_buscar(numero: str, sid: str = ""):
 def historial():
     """Lista de procesos, mas reciente primero. Los que estan vivos en memoria
     pisan a su version persistida (estado al segundo)."""
-    hist = {e["id"]: e for e in cargar_historial()}
-    for job in JOBS.values():
-        hist[job.id] = job.a_entrada()
-    lista = sorted(hist.values(), key=lambda e: e.get("fecha_inicio") or "", reverse=True)
-    salida = []
-    for e in lista:
-        # sin el log completo en el listado (se pide por detalle)
-        fila = {k: v for k, v in e.items() if k != "log"}
-        # tiene_csv: el archivo TODAVÍA existe en la carpeta 'salidas' del
-        # servidor. Es lo que habilita el botón de descarga en la lista: así
-        # el CSV se puede bajar en cualquier momento, aunque en su momento el
-        # usuario haya dicho "No, gracias", o esté entrando desde otra PC.
-        nombre_csv = e.get("csv")
-        fila["tiene_csv"] = bool(
-            nombre_csv and os.path.isfile(os.path.join(DIR_SALIDAS, nombre_csv)))
-        salida.append(fila)
-    return salida
-
-
-def _entrada_historial(job_id):
-    for e in cargar_historial():
-        if e.get("id") == job_id:
-            return e
-    return None
+    return listar_procesos()
 
 
 @app.get("/api/procesos/{job_id}")
 def progreso(job_id: str, desde: int = 0):
-    job = JOBS.get(job_id)
-    if job:
-        return job.snapshot(desde)
-    # Fallback: proceso de una corrida anterior (o de antes de un reinicio
-    # del servidor), leido del historial persistido.
-    e = _entrada_historial(job_id)
-    if not e:
+    resultado = obtener_progreso(job_id, desde)
+    if not resultado:
         raise HTTPException(404, "Proceso no encontrado")
-    log = e.get("log") or []
-    csv_nombre = e.get("csv")
-    tiene_csv = bool(csv_nombre and os.path.isfile(os.path.join(DIR_SALIDAS, csv_nombre)))
-    estado_e = e.get("estado", "ERROR")
-    if estado_e == "EN_CURSO":
-        # quedo "en curso" en el archivo pero ya no esta en memoria:
-        # el servidor se reinicio en el medio -> quedo interrumpido.
-        estado_e = "INTERRUMPIDO"
-    return {"id": e["id"], "tipo": e.get("tipo"), "estado": estado_e,
-            "descripcion": e.get("descripcion"), "fecha_inicio": e.get("fecha_inicio"),
-            "log": log[desde:], "total_log": len(log), "stats": e.get("stats") or {},
-            "tabla_resultado": e.get("tabla_resultado"), "tiene_csv": tiene_csv,
-            "error": e.get("error")}
+    return resultado
 
 
 @app.get("/api/procesos/{job_id}/csv")
 def descargar_csv(job_id: str):
-    job = JOBS.get(job_id)
-    path = job.csv_path if job else None
+    path = resolver_csv(job_id)
     if not path:
-        e = _entrada_historial(job_id)
-        if e and e.get("csv"):
-            path = os.path.join(DIR_SALIDAS, e["csv"])
-    if not path or not os.path.isfile(path):
         raise HTTPException(404, "No hay CSV disponible para este proceso")
     return FileResponse(path, media_type="text/csv",
                         filename=os.path.basename(path))

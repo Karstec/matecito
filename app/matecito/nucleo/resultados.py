@@ -61,7 +61,7 @@ def calcular_estadisticas(proceso, resultados, est=None):
     if proceso == "cuitificacion":
         return est or estadisticas_cuitificacion(resultados)
     if proceso == "cuit":
-        from validador_cuit import estadisticas as estadisticas_cuit
+        from matecito.validadores.cuit import estadisticas as estadisticas_cuit
 
         return estadisticas_cuit(resultados)
     if proceso == "denominacion":

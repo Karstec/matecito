@@ -572,6 +572,14 @@
           </div>
           <div id="proveedoresOsint" class="osint-lista"></div>
         </div>
+        <div class="pasoc" id="prevArch">
+          <b class="pasotit"><span class="pasonum">?</span> Confirmar el archivo</b>
+          <p class="pasoayuda">Primeras 10 filas del archivo elegido. Es el momento de
+            detectar que el encabezado o la columna no son los que se esperaban.</p>
+          <button class="btn btn-gris" id="btnPrevArch" type="button"
+                  style="margin-top:6px">Ver primeras filas</button>
+          <div id="prevArchCuerpo" style="margin-top:10px"></div>
+        </div>
         <div class="fila-botones">
           <button class="btn btn-verde" id="btnIniciarArchivo">Procesar archivo</button>
         </div>
@@ -587,6 +595,14 @@
           Se detectan solas la columna clave (CUIT/ID) y las columnas de <b id="txtMediosNorm">teléfonos y mails</b>.
           Cada valor separado por “|” pasa a su propia fila (mismo CUIT), deduplicando repetidos.
           El resto de las columnas se conservan. El CSV normalizado se descarga al terminar.
+        </div>
+        <div class="pasoc" id="prevArchN">
+          <b class="pasotit"><span class="pasonum">?</span> Confirmar el archivo</b>
+          <p class="pasoayuda">Primeras 10 filas del archivo elegido. Es el momento de
+            detectar que el encabezado o la columna no son los que se esperaban.</p>
+          <button class="btn btn-gris" id="btnPrevArchN" type="button"
+                  style="margin-top:6px">Ver primeras filas</button>
+          <div id="prevArchCuerpoN" style="margin-top:10px"></div>
         </div>
         <div class="fila-botones">
           <button class="btn btn-verde" id="btnIniciarArchivoN">Normalizar archivo</button>
@@ -1182,6 +1198,49 @@ $("btnPrevisualizar").onclick = cargarPrevisualizacion;
   el.addEventListener("change", ()=>{
     if($("prevCuerpo").innerHTML.trim()) cargarPrevisualizacion();
   });
+});
+
+/* ---------- previsualización del archivo plano ----------
+   El flujo por archivo solo leía el contenido al ejecutar, así que un
+   encabezado mal detectado o una columna equivocada se descubrían con el
+   proceso ya corrido. El archivo se manda, se lee en memoria y se descarta:
+   no queda en disco para mostrar 10 filas.
+
+   Mismo render que las otras dos previsualizaciones (tablaMini). */
+async function previsualizarArchivo(idInput, idCuerpo){
+  const f = $(idInput).files[0];
+  if(!f){
+    $(idCuerpo).innerHTML = "<div class='pasoinfo'>Elegí un archivo primero.</div>";
+    return;
+  }
+  $(idCuerpo).innerHTML = "<div class='pasoinfo'>Leyendo…</div>";
+  const fd = new FormData();
+  fd.append("archivo", f);
+  fd.append("limite", 10);
+  try{
+    const r = await fetch("/api/archivo/muestra", {method:"POST", body:fd});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || "no se pudo leer");
+    if(!d.cantidad){
+      $(idCuerpo).innerHTML = "<div style='color:#c05;font-size:12px'>El archivo no tiene filas.</div>";
+      return;
+    }
+    tablaMini(idCuerpo, d.columnas, d.filas,
+      `${f.name} — primeras ${d.cantidad} de ${d.total} filas`);
+    avisarColumnasNulas(idCuerpo, d);
+  }catch(e){
+    $(idCuerpo).innerHTML = `<div style="color:#c05;font-size:12px">Error: ${e.message}</div>`;
+  }
+}
+
+$("btnPrevArch").onclick  = ()=>previsualizarArchivo("fArchivo", "prevArchCuerpo");
+$("btnPrevArchN").onclick = ()=>previsualizarArchivo("fArchivoN", "prevArchCuerpoN");
+
+// Si se cambia el archivo con una muestra ya cargada, se limpia: mostrar las
+// filas de un archivo que ya no es el elegido es peor que no mostrar nada.
+[["fArchivo","prevArchCuerpo"],["fArchivoN","prevArchCuerpoN"]].forEach(([i,c])=>{
+  const el = $(i);
+  if(el) el.addEventListener("change", ()=>{ $(c).innerHTML = ""; });
 });
 
 /* ---------- cruce de nombres contra la base ----------

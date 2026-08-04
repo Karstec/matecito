@@ -2145,6 +2145,61 @@ async def normalizar_archivo_endpoint(request: Request,
     return {"ok": True, "job_id": job.id}
 
 
+@app.post("/api/archivo/muestra")
+async def api_muestra_archivo(archivo: UploadFile = File(...), limite: int = Form(10)):
+    """
+    Primeras N filas de un archivo plano, SIN guardarlo ni procesarlo.
+
+    El flujo por archivo hoy solo lee el contenido al ejecutar, así que un
+    encabezado mal detectado o una columna equivocada se descubren cuando el
+    proceso ya corrió. Esto lo adelanta.
+
+    El archivo NO se persiste: se lee en memoria y se descarta. Contiene datos
+    personales y no tiene por qué quedar en disco para mostrar 10 filas.
+    """
+    contenido = await archivo.read()
+    if not contenido:
+        raise HTTPException(400, "El archivo está vacío.")
+    try:
+        encabezado, filas, _ = _leer_archivo_plano(archivo.filename or "", contenido)
+    except Exception as e:
+        raise HTTPException(400, f"No se pudo leer el archivo: {e}")
+
+    if not filas:
+        return {"columnas": [], "filas": [], "cantidad": 0, "total": 0,
+                "diagnostico": []}
+
+    if encabezado:
+        columnas = [str(c) for c in encabezado]
+        datos = filas
+    else:
+        # Sin encabezado se numeran las columnas: es preferible a inventar
+        # nombres, que daría la impresión de que el archivo los trae.
+        columnas = [f"col{i + 1}" for i in range(len(filas[0]))]
+        datos = filas
+
+    n = max(1, min(limite, 50))
+    muestra = [[_celda_muestra(v) for v in f] for f in datos[:n]]
+
+    # Mismo diagnóstico que la previsualización por base, para que las dos
+    # pantallas se lean igual.
+    diagnostico = []
+    for i, nombre in enumerate(columnas):
+        valores = [f[i] if i < len(f) else None for f in datos[:n]]
+        textos = [str(v) for v in valores if v is not None and str(v).strip()]
+        diagnostico.append({
+            "columna": nombre,
+            "nulos": sum(1 for v in valores if v is None),
+            "vacios": sum(1 for v in valores
+                          if v is not None and str(v).strip() == ""),
+            "distintos": len(set(textos)),
+            "largo_min": min((len(t) for t in textos), default=0),
+            "largo_max": max((len(t) for t in textos), default=0),
+        })
+    return {"columnas": columnas, "filas": muestra, "cantidad": len(muestra),
+            "total": len(datos), "diagnostico": diagnostico}
+
+
 @app.post("/api/procesos/archivo")
 async def procesar_archivo(request: Request,
                            proceso: str = Form(...), pais: str = Form("AR"),

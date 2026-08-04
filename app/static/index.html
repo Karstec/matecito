@@ -154,7 +154,9 @@
     border-radius:8px; padding:14px; height:230px; overflow-y:auto; white-space:pre-wrap;}
   .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-top:14px;}
   .stat{background:var(--verde-claro); border-radius:8px; padding:12px; text-align:center;}
-  .stat .num{font-size:24px; font-weight:700; color:var(--verde-osc);}
+  .stat .num{font-size:24px; font-weight:700; color:var(--verde-osc);
+    overflow-wrap:anywhere; word-break:break-word;}
+  .stat .num.ruta{font-size:12px; line-height:1.35; font-weight:600;}
   .stat .lbl{font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--mudo);}
 
   .checks{display:flex; flex-wrap:wrap; gap:8px;}
@@ -177,24 +179,6 @@
 
 
   /* --- Previsualizacion de la tabla origen --- */
-  .prevbloque{margin:10px 0 4px; border:1px solid #d9dee3; border-radius:6px; overflow:hidden;}
-  .prevcab{width:100%; text-align:left; background:#f4f6f8; border:0; padding:9px 12px;
-    font-size:13px; font-weight:600; cursor:pointer; color:#1f4e78;}
-  .prevcab:hover{background:#eaeef2;}
-  .prevcab .flecha{display:inline-block; margin-right:6px; transition:transform .15s;}
-  .prevcab.abierto .flecha{transform:rotate(90deg);}
-  .prevcuerpo{padding:10px 12px; background:#fff;}
-  .prevestado{font-size:12px; color:#666; margin-bottom:8px;}
-  .prevscroll{overflow:auto; max-height:260px; border:1px solid #eceff1; border-radius:4px;}
-  .prevtabla{border-collapse:collapse; font-size:12px; width:100%;}
-  .prevtabla th{position:sticky; top:0; background:#1f4e78; color:#fff; text-align:left;
-    padding:5px 8px; white-space:nowrap; font-weight:600;}
-  .prevtabla td{padding:4px 8px; border-bottom:1px solid #f0f2f4; white-space:nowrap;
-    max-width:280px; overflow:hidden; text-overflow:ellipsis;}
-  .prevtabla tr:nth-child(even) td{background:#fafbfc;}
-  .prevtabla .nulo{color:#b0b6bb; font-style:italic;}
-  .prevdiag{font-size:12px; color:#666; margin-top:8px; line-height:1.6;}
-  .prevdiag .alerta{color:#c05; font-weight:600;}
 
   /* --- Panel del cruce: pasos --- */
   .pasoc{border-left:3px solid var(--verde); padding:2px 0 10px 12px; margin-bottom:14px;}
@@ -215,6 +199,10 @@
   .minitabla .nulo{color:#b0b6bb; font-style:italic;}
   .miniwrap{overflow:auto; max-height:190px; border:1px solid #eceff1; border-radius:4px;}
   .minicab{font-size:12px; font-weight:600; color:#1f4e78; margin-bottom:4px;}
+  /* Las rutas de archivo no tienen espacios donde cortar, así que sin esto
+     desbordan la tarjeta de estadísticas y rompen la grilla. */
+  .kpi-valor{overflow-wrap:anywhere; word-break:break-word; hyphens:auto;}
+  .kpi-valor.ruta{font-size:12px; line-height:1.35; font-weight:600;}
   .gridauto{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px;}
   .filaflex{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;}
   .filaflex input[type=file]{flex:1 1 220px; min-width:0;}
@@ -526,16 +514,13 @@
         <!-- PREVISUALIZACION: confirmar que la tabla y las columnas elegidas
              son las correctas ANTES de ejecutar. Solo lectura: un SELECT
              acotado, sin transaccion. -->
-        <div class="prevbloque" id="prevBloque">
-          <button class="prevcab" id="btnPrevisualizar" type="button">
-            <span class="flecha" id="prevFlecha">&#9656;</span>
-            Ver primeros registros de la tabla
-          </button>
-          <div class="prevcuerpo oculto" id="prevCuerpo">
-            <div id="prevEstado" class="prevestado">—</div>
-            <div class="prevscroll"><table class="prevtabla" id="prevTabla"></table></div>
-            <div id="prevDiag" class="prevdiag"></div>
-          </div>
+        <div class="pasoc" id="prevBloque">
+          <b class="pasotit"><span class="pasonum">?</span> Confirmar la tabla</b>
+          <p class="pasoayuda">Primeras 10 filas de la tabla y las columnas elegidas.
+            Es el momento de detectar que no es la tabla que se busca.</p>
+          <button class="btn btn-gris" id="btnPrevisualizar" type="button"
+                  style="margin-top:6px">Ver primeras filas</button>
+          <div id="prevCuerpo" style="margin-top:10px"></div>
         </div>
         <div class="fila-botones">
           <button class="btn btn-verde" id="btnIniciarDB">Generar tabla e iniciar proceso</button>
@@ -1141,17 +1126,20 @@ $("btnCancelarSin").onclick = ()=>{ $("veloConfirma").classList.add("oculto"); $
 
 
 /* ---------- previsualización de la tabla origen ----------
-   Confirma, antes de ejecutar, que la tabla y las columnas elegidas
-   contienen lo que uno cree. Elegir MAIL cuando la buena era
-   MAIL_ALTERNATIVO, o una columna vacía en el 90% de las filas, hoy se
-   descubre DESPUÉS de correr el proceso. Esto lo pone antes.
+   Confirma, antes de ejecutar, que la tabla y las columnas elegidas contienen
+   lo que uno cree. Elegir MAIL cuando la buena era MAIL_ALTERNATIVO, o una
+   columna vacía en el 90% de las filas, sin esto se descubre DESPUÉS de correr
+   el proceso.
 
-   Es de solo lectura y no bloquea nada: el proceso se puede ejecutar sin
-   abrir el panel. La confirmación la da la persona, no este código. */
+   Usa el MISMO render que el cruce de denominaciones (tablaMini). Tener dos
+   formatos de previsualización obliga a quien la mira a reaprender la pantalla
+   según por dónde entró, y a nosotros a arreglar cada cosa dos veces.
+
+   Es de solo lectura y no bloquea: el proceso se puede ejecutar sin abrirla.
+   La confirmación la da la persona, no este código. */
 function prevColumnasElegidas(){
-  // Solo las columnas que el proceso va a usar. Si no hay ninguna elegida
-  // todavía, se muestran todas: ver la tabla entera también sirve para
-  // decidir cuál columna elegir.
+  // Solo las columnas que el proceso va a usar. Si todavía no hay ninguna
+  // elegida se muestran todas: ver la tabla entera también sirve para decidir.
   const c = [];
   ["selColId","selColDato"].forEach(id=>{
     const el = $(id);
@@ -1163,12 +1151,11 @@ function prevColumnasElegidas(){
 async function cargarPrevisualizacion(){
   const esq = $("selEsquema").value, tab = $("selTabla").value;
   if(!estado.session || !tab){
-    $("prevEstado").textContent = "Elegí una tabla primero.";
-    $("prevTabla").innerHTML = ""; $("prevDiag").innerHTML = "";
+    $("prevCuerpo").innerHTML =
+      "<div class='pasoinfo'>Elegí una tabla primero.</div>";
     return;
   }
-  $("prevEstado").textContent = "Leyendo primeros registros…";
-  $("prevTabla").innerHTML = ""; $("prevDiag").innerHTML = "";
+  $("prevCuerpo").innerHTML = "<div class='pasoinfo'>Leyendo primeros registros…</div>";
   const cols = prevColumnasElegidas();
   const q = `esquema=${encodeURIComponent(esq)}&tabla=${encodeURIComponent(tab)}`
           + `&limite=10&columnas=${encodeURIComponent(cols.join(","))}`;
@@ -1176,56 +1163,24 @@ async function cargarPrevisualizacion(){
     const r = await fetch(`/api/conexion/${estado.session}/muestra?${q}`);
     const d = await r.json();
     if(!r.ok) throw new Error(d.detail || "no se pudo leer");
-    if(!d.cantidad){
-      $("prevEstado").innerHTML = "<span style='color:#c05'>La tabla no devolvió ninguna fila.</span>";
-      return;
-    }
-    const alcance = cols.length ? `columnas ${cols.join(", ")}` : "todas las columnas";
-    $("prevEstado").textContent =
-      `${d.cantidad} primeras filas de ${esq ? esq+"." : ""}${tab} · ${alcance}`;
-
-    let html = "<thead><tr>" + d.columnas.map(c=>`<th>${c}</th>`).join("") + "</tr></thead><tbody>";
-    d.filas.forEach(f=>{
-      html += "<tr>" + f.map(v=>{
-        if(v === null) return "<td class='nulo'>(null)</td>";
-        if(v === "")   return "<td class='nulo'>(vacío)</td>";
-        return `<td>${v.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</td>`;
-      }).join("") + "</tr>";
-    });
-    $("prevTabla").innerHTML = html + "</tbody>";
-
-    // El diagnóstico es una SEÑAL sobre la muestra, no una estadística de la
-    // tabla: si 10 de 10 vienen nulas, la columna elegida casi seguro no es
-    // la que se busca.
-    $("prevDiag").innerHTML = d.diagnostico.map(x=>{
-      const avisos = [];
-      if(x.nulos === d.cantidad) avisos.push("<span class='alerta'>TODA NULA</span>");
-      else if(x.nulos) avisos.push(`${x.nulos} nulas`);
-      if(x.vacios) avisos.push(`${x.vacios} vacías`);
-      if(x.distintos === 1 && d.cantidad > 1) avisos.push("<span class='alerta'>un solo valor distinto</span>");
-      return `<b>${x.columna}</b>: largo ${x.largo_min}-${x.largo_max}, `
-           + `${x.distintos} distintos` + (avisos.length ? ` — ${avisos.join(", ")}` : "");
-    }).join("<br>");
+    const alcance = cols.length ? cols.join(", ") : "todas las columnas";
+    tablaMini("prevCuerpo", d.columnas, d.filas,
+      `${esq ? esq+"." : ""}${tab} — primeras ${d.cantidad} filas · ${alcance}`);
+    avisarColumnasNulas("prevCuerpo", d);
   }catch(e){
-    $("prevEstado").innerHTML = `<span style='color:#c05'>Error: ${e.message}</span>`;
+    $("prevCuerpo").innerHTML = `<div style="color:#c05;font-size:12px">Error: ${e.message}</div>`;
   }
 }
 
-$("btnPrevisualizar").onclick = ()=>{
-  const cuerpo = $("prevCuerpo"), cab = $("btnPrevisualizar");
-  const abrir = cuerpo.classList.contains("oculto");
-  cuerpo.classList.toggle("oculto", !abrir);
-  cab.classList.toggle("abierto", abrir);
-  if(abrir) cargarPrevisualizacion();
-};
+$("btnPrevisualizar").onclick = cargarPrevisualizacion;
 
-// Si cambia la tabla o alguna columna con el panel abierto, se recarga solo:
-// una muestra vieja de otra tabla es peor que no mostrar nada.
+// Si cambia la tabla o alguna columna con la muestra ya cargada, se recarga
+// sola: una muestra vieja de otra tabla es peor que no mostrar nada.
 ["selEsquema","selTabla","selColId","selColDato"].forEach(id=>{
   const el = $(id);
   if(!el) return;
   el.addEventListener("change", ()=>{
-    if(!$("prevCuerpo").classList.contains("oculto")) cargarPrevisualizacion();
+    if($("prevCuerpo").innerHTML.trim()) cargarPrevisualizacion();
   });
 });
 
@@ -1257,6 +1212,16 @@ function elegirPorNombre(sel, candidatos){
 function pasoActivo(id, activo){
   $(id).classList.toggle("bloqueado", !activo);
 }
+function avisarColumnasNulas(cont, d){
+  // Una columna que viene TODA nula en la muestra casi seguro no es la que se
+  // busca. Es una señal sobre las 10 filas, no una estadística de la tabla.
+  const nulas = (d.diagnostico || []).filter(x=>x.nulos === d.cantidad).map(x=>x.columna);
+  if(!nulas.length) return;
+  $(cont).innerHTML +=
+    `<div style="color:#c05;font-size:12px;margin-top:6px">⚠ Vienen todas nulas: `
+    + `<b>${nulas.join(", ")}</b>. Revisá si es la columna correcta.</div>`;
+}
+
 function tablaMini(cont, columnas, filas, titulo){
   if(!filas.length){ $(cont).innerHTML =
     `<div class="minicab">${titulo}</div><div style="color:#c05;font-size:12px">Sin filas.</div>`; return; }
@@ -1418,11 +1383,7 @@ $("btnCrucePrev").onclick = async ()=>{
     if(!r.ok) throw new Error(d.detail || "no se pudo leer");
     tablaMini("crucePrevBase", d.columnas, d.filas,
               `Base — ${$("cruceTabla").value}, primeras ${d.cantidad} filas`);
-    const alertas = d.diagnostico.filter(x=>x.nulos === d.cantidad).map(x=>x.columna);
-    if(alertas.length)
-      $("crucePrevBase").innerHTML +=
-        `<div style="color:#c05;font-size:12px;margin-top:6px">⚠ Vienen todas nulas: `
-        + `<b>${alertas.join(", ")}</b>. Revisá si es la columna correcta.</div>`;
+    avisarColumnasNulas("crucePrevBase", d);
     cruce.muestraOk = true;
     revisarCruceListo();
   }catch(e){
@@ -1698,9 +1659,29 @@ function mostrarResultado(j){
     no_encontrados:"Sin match", en_revision:"A revisar",
     validados:"Validados", solo_cuit:"Solo CUIT", solo_denom:"Solo denominación",
     no_coincide:"No coincide", pendientes:"A decidir", dni_invalido:"DNI inválido",
-    con_alerta:"Con alerta"};
-  for(const [k,v] of Object.entries(s))
-    cont.innerHTML += `<div class="stat"><div class="num">${v}</div><div class="lbl">${etiquetas[k]||k}</div></div>`;
+    con_alerta:"Con alerta",
+    // Cruce de denominaciones
+    filas_archivo:"Filas del archivo", filas_base:"Registros de la base",
+    pares:"Pares comparados", SI:"Coinciden", RE:"A revisar", NO:"No coinciden",
+    sin_candidatos:"Sin candidato", ruido:"Ruido", juridicas:"Jurídicas",
+    insertadas:"Filas generadas", csv:"CSV",
+    // Depuración
+    depurados:"Depurados", sin_cambios:"Sin cambios",
+    pais_asumido:"País asumido", sin_numero:"Sin número"};
+  for(const [k,v] of Object.entries(s)){
+    // Una ruta de archivo no tiene espacios donde cortar: renderizada como
+    // número gigante desborda la tarjeta y rompe la grilla entera. Además el
+    // valor útil es el nombre del archivo, no la ruta completa.
+    const esRuta = typeof v === "string" && /[\\/]/.test(v);
+    if(esRuta){
+      const nombre = String(v).split(/[\\/]/).pop();
+      cont.innerHTML += `<div class="stat"><div class="num ruta" title="${v}">`
+        + `${nombre}</div><div class="lbl">${etiquetas[k]||k}</div></div>`;
+    }else{
+      cont.innerHTML += `<div class="stat"><div class="num">${v}</div>`
+        + `<div class="lbl">${etiquetas[k]||k}</div></div>`;
+    }
+  }
   cont.classList.remove("oculto");
   if(estado.esArchivo){
     // archivo plano: el CSV se genera y descarga automáticamente

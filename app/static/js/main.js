@@ -14,6 +14,7 @@ import {
   initProcessRunner,
 } from "./features/process-runner.js";
 import { cargarHistorial, initHistory } from "./features/history.js";
+import { initDatabase } from "./features/database.js";
 import {
   initNavigation,
   irInicio,
@@ -42,7 +43,6 @@ async function init(){
     for(const [cod, nom] of Object.entries(r.paises_telefono))
       sel.add(new Option(`${nom} (${cod})`, cod));
   }
-  cargarPresets();
   actualizarPreview();
   irInicio();
 }
@@ -80,124 +80,6 @@ $("opDB").onclick = ()=>elegirOrigen("db");
 $("opArchivo").onclick = ()=>elegirOrigen("archivo");
 for(const op of [$("opDB"), $("opArchivo")])
   op.onkeydown = e=>{ if(e.key==="Enter"||e.key===" ") op.click(); };
-
-/* ---------- presets ---------- */
-async function cargarPresets(){
-  const p = await fetch("/api/presets").then(x=>x.json());
-  const sel = $("selPreset");
-  sel.innerHTML = '<option value="">— Personalizado —</option>';
-  Object.keys(p).forEach(n=>sel.add(new Option(n,n)));
-  sel.dataset.presets = JSON.stringify(p);
-}
-$("selPreset").onchange = ()=>{
-  const p = JSON.parse($("selPreset").dataset.presets||"{}")[$("selPreset").value];
-  if(!p) return;
-  $("fDbType").value = p.db_type||"oracle"; $("fHost").value = p.host||"";
-  $("fPort").value = p.port||""; $("fUser").value = p.user||"";
-  $("fDbname").value = p.dbname||"";
-};
-$("btnGuardarPreset").onclick = async ()=>{
-  const nombre = prompt("Nombre del preset (ej: Mar del Plata):");
-  if(!nombre) return;
-  await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({nombre, datos:{
-      db_type:$("fDbType").value, host:$("fHost").value, port:$("fPort").value,
-      user:$("fUser").value, dbname:$("fDbname").value}})});
-  await cargarPresets();
-  $("selPreset").value = nombre;
-  $("msgConexion").textContent = `Preset "${nombre}" guardado (sin contraseña).`;
-};
-
-/* ---------- paso 2: conectar ---------- */
-$("btnConectar").onclick = async ()=>{
-  $("msgConexion").textContent = "Conectando…"; $("btnConectar").disabled = true;
-  try{
-    const r = await fetch("/api/conexion",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({db_type:$("fDbType").value, host:$("fHost").value, port:$("fPort").value,
-        user:$("fUser").value, password:$("fPass").value, dbname:$("fDbname").value,
-        })});
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.detail||"Error de conexión");
-    estado.session = j.session_id;
-    $("msgConexion").innerHTML = '<span style="color:var(--verde-osc)">✔ Conectado</span>';
-    $("chipEstado").textContent = "conectado";
-
-    const sel = $("selEsquema");
-    sel.innerHTML = '<option value="">Elegir…</option>';
-    j.esquemas.forEach(e=>sel.add(new Option(e,e)));
-    $("cartaSeleccion").classList.remove("oculto");
-    const esDenom = estado.proceso==="denominacion" || estado.proceso==="comparacion";
-    $("preguntaTabla").classList.toggle("oculto", !esDenom);
-    $("gridSeleccion").classList.toggle("oculto", esDenom);
-    $("opMismaTabla").classList.remove("sel"); $("opTablasDistintas").classList.remove("sel");
-    $("avisoTablasDistintas").classList.add("oculto");
-  }catch(e){
-    $("msgConexion").innerHTML = `<span style="color:var(--rojo)">✖ ${e.message}</span>`;
-  }finally{ $("btnConectar").disabled = false; }
-};
-
-/* ---------- pregunta misma tabla (denominación) ---------- */
-$("opMismaTabla").onclick = ()=>{
-  $("opMismaTabla").classList.add("sel"); $("opTablasDistintas").classList.remove("sel");
-  $("avisoTablasDistintas").classList.add("oculto");
-  $("gridSeleccion").classList.remove("oculto");
-};
-$("opTablasDistintas").onclick = ()=>{
-  $("opTablasDistintas").classList.add("sel"); $("opMismaTabla").classList.remove("sel");
-  $("avisoTablasDistintas").classList.remove("oculto");
-  $("gridSeleccion").classList.add("oculto");
-  $("cartaGeneracion").classList.add("oculto");
-};
-for(const op of [$("opMismaTabla"), $("opTablasDistintas")])
-  op.onkeydown = e=>{ if(e.key==="Enter"||e.key===" ") op.click(); };
-
-/* ---------- paso 3: esquema → tabla → columnas ---------- */
-$("selEsquema").onchange = async ()=>{
-  const esq = $("selEsquema").value;
-  const selT = $("selTabla");
-  selT.innerHTML = '<option value="">Elegir…</option>'; selT.disabled = !esq;
-  $("selColId").disabled = $("selColDato").disabled = $("btnVerColumnas").disabled = true;
-  $("cartaGeneracion").classList.add("oculto");
-  if(!esq) return;
-  const j = await fetch(`/api/conexion/${estado.session}/tablas?esquema=${encodeURIComponent(esq)}`).then(x=>x.json());
-  (j.tablas||[]).forEach(t=>selT.add(new Option(t,t)));
-};
-$("selTabla").onchange = async ()=>{
-  const esq = $("selEsquema").value, tab = $("selTabla").value;
-  const s1 = $("selColId"), s2 = $("selColDato");
-  s1.innerHTML = s2.innerHTML = '<option value="">Elegir…</option>';
-  s1.disabled = s2.disabled = $("btnVerColumnas").disabled = !tab;
-  $("cartaGeneracion").classList.add("oculto");
-  if(!tab) return;
-  const j = await fetch(`/api/conexion/${estado.session}/columnas?esquema=${encodeURIComponent(esq)}&tabla=${encodeURIComponent(tab)}`).then(x=>x.json());
-  estado.columnas = j.columnas||[];
-  estado.columnas.forEach(c=>{ s1.add(new Option(c.nombre,c.nombre)); s2.add(new Option(c.nombre,c.nombre)); });
-};
-function chequearColumnas(){
-  // Cuitificación usa UNA sola columna (el número): la denominación no se
-  // aporta, se TRAE del padrón. El resto de los procesos necesita las dos.
-  const soloUna = estado.proceso==="cuitificacion";
-  const listo = soloUna ? !!$("selColId").value
-                        : ($("selColId").value && $("selColDato").value);
-  if(listo){
-    $("cartaGeneracion").classList.remove("oculto");
-    actualizarPreview();
-  }
-}
-$("selColId").onchange = chequearColumnas;
-$("selColDato").onchange = chequearColumnas;
-
-$("btnVerColumnas").onclick = ()=>{
-  const tb = $("tablaColumnas").querySelector("tbody");
-  tb.innerHTML = "";
-  (estado.columnas||[]).forEach(c=>{
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${c.nombre}</td><td>${c.tipo||""}</td><td>${c.largo??""}</td>`;
-    tb.appendChild(tr);
-  });
-  $("veloColumnas").classList.remove("oculto");
-};
-$("btnCerrarColumnas").onclick = ()=>$("veloColumnas").classList.add("oculto");
 
 /* ---------- paso 4: preview + iniciar ---------- */
 function sanitizar(t){ return (t||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"")
@@ -710,4 +592,5 @@ initHistory({
   },
 });
 initNavigation({onLoadHome: cargarHistorial});
+initDatabase({onSelectionReady: actualizarPreview});
 init();

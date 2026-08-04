@@ -13,9 +13,6 @@ Todos los procesos se exponen como endpoints REST (/api/...), pensados para
 que más adelante la app grande (AWS) los consuma directo sin la interfaz.
 """
 import os
-import io
-import re
-import csv
 import sys
 import uuid
 import queue
@@ -56,6 +53,13 @@ from matecito.padron.bcra import abrir_padron, TABLA_PADRON_DEFAULT
 from matecito.nucleo.claves_padron import (armar_claves, consultar_padron,
                            buscar_filas_cuit, buscar_filas_dni)
 from matecito.nucleo.conexiones import ConexionWeb, inicializar_oracle
+from matecito.nucleo.archivos import (
+    celda_muestra,
+    crear_muestra,
+    detectar_columnas,
+    detectar_columnas_normalizacion,
+    leer_archivo,
+)
 from matecito.nucleo.persistencia import (
     cargar_historial,
     cargar_presets,
@@ -64,6 +68,11 @@ from matecito.nucleo.persistencia import (
     leer_usuario_guardado,
 )
 from matecito.nucleo.trabajos import JOBS, Job
+from matecito.nucleo.resultados import (
+    completar_resultado as _stats_y_csv,
+    nombre_tabla_resultado,
+    sanitizar_identificador,
+)
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
 from matecito.validadores import osint_email
@@ -101,16 +110,6 @@ def _limitar_emails_osint(emails, proveedores, limite=LIMITE_INTERACCIONES_OSINT
     cantidad_proveedores = max(1, len(proveedores))
     max_emails = limite // cantidad_proveedores
     return emails[:max_emails], max_emails
-
-
-def _celda_muestra(valor, largo=80):
-    """Representación corta y segura de una celda para la previsualización."""
-    if valor is None:
-        return None
-    texto = str(valor).replace("\n", " ").replace("\r", " ").strip()
-    if texto == "":
-        return ""
-    return texto if len(texto) <= largo else texto[:largo - 1] + "…"
 
 
 def config_padron():
@@ -165,48 +164,6 @@ CONEXIONES = {}  # session_id -> ConexionWeb
 # =====================================================================
 # UTILIDADES
 # =====================================================================
-def sanitizar_identificador(texto):
-    """Convierte texto libre en un identificador válido de tabla:
-    'mar del plata' -> 'MAR_DEL_PLATA'. Sin barras, acentos ni símbolos."""
-    import unicodedata
-    if not texto:
-        return ""
-    t = unicodedata.normalize("NFKD", str(texto))
-    t = "".join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r"[^A-Za-z0-9]+", "_", t).strip("_").upper()
-    return t
-
-
-def nombre_tabla_resultado(usuario, cliente, db_type=None):
-    """{USUARIO}_{CLIENTE}_{YYYYMMDD_HHMMSS} o {USUARIO}_{YYYYMMDD_HHMMSS}.
-    (La fecha va como YYYYMMDD_HHMMSS: '/' no es un carácter válido en nombres
-    de tabla, y el timestamp completo evita colisiones si se corre dos veces
-    el mismo día.)
-
-    Si `db_type` es 'oracle', el nombre se recorta a 30 caracteres, que es el
-    máximo que admite Oracle 12.1 (versiones posteriores llegan a 128, pero se
-    respeta el límite viejo para que la misma tabla se pueda crear en
-    cualquier servidor del parque). Se recorta la parte VARIABLE (usuario +
-    cliente) y NUNCA el timestamp: el timestamp es lo que garantiza que dos
-    corridas no colisionen, así que perderlo sería peor que perder legibilidad.
-
-    Antes este recorte estaba copiado -textualmente, 17 líneas- en los cuatro
-    orquestadores de job. Vive acá porque es una propiedad del NOMBRE, no del
-    proceso que lo usa.
-    """
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    u = sanitizar_identificador(usuario) or "USUARIO"
-    c = sanitizar_identificador(cliente)
-    nombre = f"{u}_{c}_{ts}" if c else f"{u}_{ts}"
-
-    if db_type == "oracle" and len(nombre) > 30:
-        sufijo = f"_{ts}"                      # intocable
-        disponible = 30 - len(sufijo)
-        base = (f"{u}_{c}" if c else u)[:disponible].rstrip("_")
-        nombre = f"{base}{sufijo}"
-    return nombre
-
-
 # ---------------------------------------------------------------------
 # USUARIO POR SESIÓN (multi-usuario / VPN)
 # ---------------------------------------------------------------------
@@ -1001,79 +958,6 @@ def _job_normalizar_db(job, cx, params):
         job.finalizar("ERROR")
 
 
-def _stats_y_csv(job, proceso, resultados, nombre_base, est=None):
-    total = len(resultados)
-    if proceso == "normalizacion":
-        e = est or {}
-        job.stats = {"total": total,
-                     "cuit_unicos": e.get("claves_unicas", 0),
-                     "medios": e.get("valores_totales", 0)}
-    elif proceso == "cuitificacion":
-        job.stats = est or estadisticas_cuitificacion(resultados)
-    elif proceso == "cuit":
-        from validador_cuit import estadisticas as _est_cuit
-        job.stats = _est_cuit(resultados)
-    elif proceso == "denominacion":
-        # Se usa la columna COINCIDE (que ya refleja el UMBRAL que eligió el
-        # usuario), no un 80 hardcodeado: antes las stats ignoraban el umbral
-        # elegido y siempre contaban contra 80.
-        coinc = sum(1 for r in resultados if r.get("COINCIDE") == 1)
-        sin_c = sum(1 for r in resultados
-                    if r["ANALISIS"].startswith(("SIN COINCIDENCIA", "DENOMINACION VACIA",
-                                                 "AMBAS DENOMINACIONES")))
-        job.stats = {"total": total, "coincidentes": coinc,
-                     "parciales": total - coinc - sin_c, "sin_coincidencia": sin_c}
-    elif proceso == "comparacion":
-        # Las stats salen del propio módulo: incluyen el desglose por MOTIVO
-        # y la dispersión promedio (qué tanto discrepan los algoritmos).
-        job.stats = comparadores.estadisticas_comparacion(resultados)
-    elif proceso == "telefonos":
-        validos = sum(r["VALIDO"] for r in resultados)
-        moviles = sum(1 for r in resultados if r["TIPO_LINEA"] == "MOVIL")
-        fijos = sum(1 for r in resultados if r["TIPO_LINEA"] == "FIJO")
-        job.stats = {"total": total, "validos": validos, "bajas": total - validos,
-                     "moviles": moviles, "fijos": fijos}
-    elif proceso == "osint":
-        job.stats = {
-            "total": total,
-            "consultados": sum(1 for r in resultados if r.get("PROVEEDOR")),
-            "registrados": sum(
-                1 for r in resultados if r.get("ESTADO_OSINT") == "Registered"
-            ),
-            "errores": sum(
-                1 for r in resultados if r.get("ESTADO_OSINT") == "Error"
-            ),
-        }
-    elif proceso in ("dep_mails", "dep_telefonos"):
-        # DEPURACION: no hay bajas ni estados. Lo único que se cuenta es
-        # cuántos datos se tocaron y cuántos quedaron igual. Un dato que la
-        # depuración no cambió NO es un dato malo: es un dato que ya estaba
-        # bien escrito.
-        tocados = sum(1 for r in resultados if r.get("FUE_DEPURADO") == "SI")
-        job.stats = {"total": total, "depurados": tocados,
-                     "sin_cambios": total - tocados}
-        if proceso == "dep_telefonos":
-            job.stats["pais_asumido"] = sum(
-                1 for r in resultados if r.get("ORIGEN_PAIS") == "asumido")
-            job.stats["sin_numero"] = sum(
-                1 for r in resultados if not r.get("E164"))
-    else:
-        bajas = sum(1 for r in resultados if r["ESTADO"] == "BAJA")
-        mods = sum(1 for r in resultados if r["ESTADO"] == "MODIFICADO")
-        rev = sum(1 for r in resultados if r["ESTADO"] == "REVISION MANUAL")
-        job.stats = {"total": total, "conservados": total - bajas - mods - rev,
-                     "modificados": mods, "bajas": bajas, "revision_manual": rev}
-
-    # CSV listo para descargar (se ofrece al usuario al terminar)
-    if resultados:
-        path = os.path.join(DIR_SALIDAS, f"RESULTADO_{nombre_base}.csv")
-        with open(path, "w", encoding="utf-8-sig", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(resultados[0].keys()))
-            w.writeheader()
-            w.writerows(resultados)
-        job.csv_path = path
-
-
 def _job_procesar_archivo(job, proceso, filas, encabezado, idx_id, idx_dato,
                           nombre_original, pais, delim=",",
                           umbral=UMBRAL_COINCIDENTE_DEFAULT,
@@ -1453,7 +1337,7 @@ def api_muestra(sid: str, esquema: str, tabla: str, columnas: str = "",
     # Las celdas se recortan del lado del servidor: una columna CLOB puede
     # traer megabytes por fila y no tiene sentido mandarlos para mostrar 10
     # filas en una tabla.
-    filas = [[_celda_muestra(v) for v in fila] for fila in vista["filas"]]
+    filas = [[celda_muestra(v) for v in fila] for fila in vista["filas"]]
     return {
         "columnas": vista["columnas"],
         "filas": filas,
@@ -1534,170 +1418,6 @@ def normalizar_db(req: NormalizacionDBRequest):
     return {"ok": True, "job_id": job.id}
 
 
-def _detectar_encoding(data: bytes):
-    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
-        try:
-            data.decode(enc)
-            return enc
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-    return "latin-1"
-
-
-def _leer_archivo_plano(nombre, contenido):
-    """Devuelve (encabezado_o_None, filas, delim)."""
-    ext = os.path.splitext(nombre)[1].lower()
-    if ext in (".xlsx", ".xlsm", ".xls"):
-        import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True)
-        ws = wb.active
-        filas = [["" if c is None else c for c in row] for row in ws.iter_rows(values_only=True)]
-        delim = ","
-    else:
-        enc = _detectar_encoding(contenido)
-        texto = contenido.decode(enc)
-        muestra = texto[:4096]
-        try:
-            delim = csv.Sniffer().sniff(muestra, delimiters=",;\t|").delimiter
-        except Exception:
-            delim = ","
-        filas = list(csv.reader(io.StringIO(texto), delimiter=delim))
-    if not filas:
-        return None, [], delim
-    encabezado = filas[0]
-    tiene_header = any("@" not in str(c) for c in encabezado) and any(
-        any(k in str(c).lower() for k in ("mail", "correo", "email", "tel", "cel", "cuit", "id",
-                                          "denom", "nombre", "razon", "razón", "name", "titular"))
-        for c in encabezado)
-    if tiene_header:
-        return encabezado, filas[1:], delim
-    return None, filas, delim
-
-
-def _detectar_columnas(encabezado, filas, proceso):
-    """Detecta índice de la columna de dato (mail/teléfono) y del ID/CUIT."""
-    if proceso in ("cuit", "cuitificacion"):
-        # cuitificacion: una sola columna (el número).
-        # cuit (validar denominación contra el padrón): número + denominación.
-        idx_num, idx_denom = None, None
-        if encabezado:
-            for i, c in enumerate(encabezado):
-                n = str(c).lower()
-                if idx_num is None and any(k in n for k in ("cuit", "cuil", "dni", "documento", "nro_doc")):
-                    idx_num = i
-                if idx_denom is None and any(k in n for k in ("denom", "nombre", "razon", "razón", "titular", "apellido")):
-                    idx_denom = i
-        if idx_num is None and filas:
-            # sin encabezado útil: la columna con más dígitos suele ser el número
-            mejor, mejor_dig = None, -1
-            for i, c in enumerate(filas[0]):
-                d = len(re.sub(r"\D", "", str(c)))
-                if d > mejor_dig:
-                    mejor, mejor_dig = i, d
-            idx_num = mejor if mejor is not None else 0
-        if idx_num is None:
-            idx_num = 0
-        if idx_denom is None:
-            # la primera columna que no sea la del número
-            idx_denom = 1 if idx_num != 1 else 0
-        return idx_num, idx_denom
-
-    if proceso in ("denominacion", "comparacion"):
-        # dos columnas de nombre: las dos primeras que parezcan denominación,
-        # o directamente las dos primeras columnas del archivo
-        # (COMPARACIÓN usa el mismo criterio: también compara dos nombres)
-        idxs = []
-        if encabezado:
-            for i, c in enumerate(encabezado):
-                n = str(c).lower()
-                if any(k in n for k in ("denom", "nombre", "razon", "razón", "name", "titular")):
-                    idxs.append(i)
-        if len(idxs) < 2:
-            idxs = [0, 1]
-        return idxs[0], idxs[1]  # (columna 1 = origen, columna 2 = a validar)
-    claves_dato = ("mail", "correo", "email") if proceso in ("mails", "osint") else \
-                  ("tel", "cel", "movil", "móvil", "fono", "whatsapp")
-    idx_dato, idx_id = None, None
-    if encabezado:
-        for i, c in enumerate(encabezado):
-            n = str(c).lower()
-            if idx_dato is None and any(k in n for k in claves_dato) and "id" not in n[:3]:
-                idx_dato = i
-            if idx_id is None and ("cuit" in n or n.startswith("id") or "_id" in n or "dni" in n):
-                idx_id = i
-    if idx_dato is None and filas:
-        # sin encabezado útil: para mails, la columna con '@'; para teléfonos,
-        # la columna con más dígitos
-        fila0 = filas[0]
-        if proceso in ("mails", "osint"):
-            for i, c in enumerate(fila0):
-                if "@" in str(c):
-                    idx_dato = i
-                    break
-        else:
-            mejor, mejor_dig = None, -1
-            for i, c in enumerate(fila0):
-                d = len(re.sub(r"\D", "", str(c)))
-                if d > mejor_dig:
-                    mejor, mejor_dig = i, d
-            idx_dato = mejor
-    if idx_dato is None:
-        idx_dato = 0
-    return idx_id, idx_dato
-
-
-def _detectar_columnas_normalizacion(encabezado, filas, medios_pedidos):
-    """Para NORMALIZACIÓN: detecta el índice de la clave (CUIT/ID), los
-    índices de las columnas de medio pedidas (teléfonos y/o mails) y los
-    índices de columnas extra a arrastrar. `medios_pedidos` es un subconjunto
-    de {'telefonos','mails'}."""
-    idx_clave = None
-    idxs_tel, idxs_mail = [], []
-    n_cols = len(encabezado) if encabezado else (len(filas[0]) if filas else 0)
-
-    claves_tel = ("tel", "cel", "movil", "móvil", "fono", "whatsapp", "wsp")
-    claves_mail = ("mail", "correo", "email")
-    claves_id = ("cuit", "dni", "cuil", "documento")
-
-    if encabezado:
-        for i, c in enumerate(encabezado):
-            n = str(c).lower()
-            if idx_clave is None and (any(k in n for k in claves_id)
-                                      or n.startswith("id") or "_id" in n):
-                idx_clave = i
-                continue
-            if any(k in n for k in claves_mail):
-                idxs_mail.append(i)
-            elif any(k in n for k in claves_tel):
-                idxs_tel.append(i)
-    # Fallback sin encabezado útil: 1ra columna = clave, y se clasifican las
-    # demás mirando el contenido de la primera fila (con '@' = mail, con
-    # muchos dígitos = teléfono).
-    if idx_clave is None:
-        idx_clave = 0
-    if not idxs_tel and not idxs_mail and filas:
-        fila0 = filas[0]
-        for i, c in enumerate(fila0):
-            if i == idx_clave:
-                continue
-            s = str(c)
-            if "@" in s:
-                idxs_mail.append(i)
-            elif len(re.sub(r"\D", "", s)) >= 6:
-                idxs_tel.append(i)
-
-    idxs_medios = []
-    if "telefonos" in medios_pedidos:
-        idxs_medios += idxs_tel
-    if "mails" in medios_pedidos:
-        idxs_medios += idxs_mail
-    idxs_medios = sorted(set(idxs_medios))
-
-    usados = {idx_clave} | set(idxs_medios)
-    idxs_extra = [i for i in range(n_cols) if i not in usados]
-    return idx_clave, idxs_medios, idxs_extra
-
-
 @app.post("/api/normalizacion/archivo")
 async def normalizar_archivo_endpoint(request: Request,
                                       medios: str = Form(...),
@@ -1708,10 +1428,10 @@ async def normalizar_archivo_endpoint(request: Request,
     if not medios_pedidos or not medios_pedidos <= {"telefonos", "mails"}:
         raise HTTPException(400, "Elegí qué normalizar: teléfonos y/o mails.")
     contenido = await archivo.read()
-    encabezado, filas, delim = _leer_archivo_plano(archivo.filename, contenido)
+    encabezado, filas, delim = leer_archivo(archivo.filename, contenido)
     if not filas:
         raise HTTPException(400, "El archivo está vacío o no se pudo leer.")
-    idx_clave, idxs_medios, idxs_extra = _detectar_columnas_normalizacion(
+    idx_clave, idxs_medios, idxs_extra = detectar_columnas_normalizacion(
         encabezado, filas, medios_pedidos)
     if not idxs_medios:
         tipo = " y ".join(medios_pedidos)
@@ -1743,43 +1463,11 @@ async def api_muestra_archivo(archivo: UploadFile = File(...), limite: int = For
     if not contenido:
         raise HTTPException(400, "El archivo está vacío.")
     try:
-        encabezado, filas, _ = _leer_archivo_plano(archivo.filename or "", contenido)
+        encabezado, filas, _ = leer_archivo(archivo.filename or "", contenido)
     except Exception as e:
         raise HTTPException(400, f"No se pudo leer el archivo: {e}")
 
-    if not filas:
-        return {"columnas": [], "filas": [], "cantidad": 0, "total": 0,
-                "diagnostico": []}
-
-    if encabezado:
-        columnas = [str(c) for c in encabezado]
-        datos = filas
-    else:
-        # Sin encabezado se numeran las columnas: es preferible a inventar
-        # nombres, que daría la impresión de que el archivo los trae.
-        columnas = [f"col{i + 1}" for i in range(len(filas[0]))]
-        datos = filas
-
-    n = max(1, min(limite, 50))
-    muestra = [[_celda_muestra(v) for v in f] for f in datos[:n]]
-
-    # Mismo diagnóstico que la previsualización por base, para que las dos
-    # pantallas se lean igual.
-    diagnostico = []
-    for i, nombre in enumerate(columnas):
-        valores = [f[i] if i < len(f) else None for f in datos[:n]]
-        textos = [str(v) for v in valores if v is not None and str(v).strip()]
-        diagnostico.append({
-            "columna": nombre,
-            "nulos": sum(1 for v in valores if v is None),
-            "vacios": sum(1 for v in valores
-                          if v is not None and str(v).strip() == ""),
-            "distintos": len(set(textos)),
-            "largo_min": min((len(t) for t in textos), default=0),
-            "largo_max": max((len(t) for t in textos), default=0),
-        })
-    return {"columnas": columnas, "filas": muestra, "cantidad": len(muestra),
-            "total": len(datos), "diagnostico": diagnostico}
+    return crear_muestra(encabezado, filas, limite)
 
 
 @app.post("/api/procesos/archivo")
@@ -1799,10 +1487,10 @@ async def procesar_archivo(request: Request,
     if proceso == "osint" and not (1 <= limite_interacciones_osint <= LIMITE_INTERACCIONES_OSINT):
         raise HTTPException(400, f"El límite OSINT debe estar entre 1 y {LIMITE_INTERACCIONES_OSINT:,} interacciones.")
     contenido = await archivo.read()
-    encabezado, filas, delim = _leer_archivo_plano(archivo.filename, contenido)
+    encabezado, filas, delim = leer_archivo(archivo.filename, contenido)
     if not filas:
         raise HTTPException(400, "El archivo está vacío o no se pudo leer.")
-    idx_id, idx_dato = _detectar_columnas(encabezado, filas, proceso)
+    idx_id, idx_dato = detectar_columnas(encabezado, filas, proceso)
     proveedores = [p.strip() for p in proveedores_osint.split(",") if p.strip()]
     if proceso == "osint" and not proveedores:
         raise HTTPException(400, "Elegí al menos un proveedor OSINT.")

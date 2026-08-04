@@ -75,6 +75,23 @@ class ContratoRutasTest(unittest.TestCase):
         self.assertIsInstance(datos["paises_telefono"], dict)
         self.assertIn("AR", datos["paises_telefono"])
 
+    def test_muestra_archivo_conserva_el_contrato(self):
+        respuesta = self.client.post(
+            "/api/archivo/muestra",
+            files={
+                "archivo": (
+                    "contactos.csv",
+                    b"ID,EMAIL\n1,persona@example.com\n",
+                    "text/csv",
+                )
+            },
+            data={"limite": "10"},
+        )
+        self.assertEqual(200, respuesta.status_code)
+        datos = respuesta.json()
+        self.assertEqual(["ID", "EMAIL"], datos["columnas"])
+        self.assertEqual(["1", "persona@example.com"], datos["filas"][0])
+
     def test_historial_devuelve_una_lista(self):
         respuesta = self.client.get("/api/historial")
         self.assertEqual(200, respuesta.status_code)

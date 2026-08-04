@@ -20,6 +20,7 @@ function aplicarPreset(){
   $("fPort").value = preset.port||"";
   $("fUser").value = preset.user||"";
   $("fDbname").value = preset.dbname||"";
+  $("fPass").value = preset.password||""; // # HACK: Se guarda la contraseña SOLO DESARROLLO.
 }
 
 async function guardarPreset(){
@@ -34,7 +35,7 @@ async function guardarPreset(){
       port:$("fPort").value,
       user:$("fUser").value,
       dbname:$("fDbname").value,
-      password:$("fPass").value, // # TODO: Se guarda la contraseña SOLO DESARROLLO.
+      password:$("fPass").value, // # HACK: Se guarda la contraseña SOLO DESARROLLO.
     }}),
   });
   await cargarPresets();

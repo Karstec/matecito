@@ -14,7 +14,6 @@ que más adelante la app grande (AWS) los consuma directo sin la interfaz.
 """
 import os
 import sys
-import uuid
 import queue
 import threading
 from datetime import datetime
@@ -31,23 +30,22 @@ from matecito.api.schemas import (
     UsuarioRequest,
 )
 from matecito.config import (
-    DIR_APP,
     DIR_LISTAS,
     DIR_SALIDAS,
     DIR_STATIC,
     LIMITE_INTERACCIONES_OSINT,
-    RAIZ_PROYECTO,
 )
 
 # --- lógica de validación ---
 from matecito.validadores.telefonos import (validar_telefono, fila_resultado,
-                                 PAISES_TELEFONO, USUARIO_AGENTE)
+                                 PAISES_TELEFONO)
 from matecito.validadores.denominaciones import (comparar_denominaciones,
                                       fila_resultado_denominacion,
                                       UMBRAL_COINCIDENTE_DEFAULT)
 from matecito.validadores.cuitificador import (cuitificar_lote, buscar_manual,
                           estadisticas_cuitificacion, solo_digitos)
-from matecito.padron.bcra import abrir_padron, TABLA_PADRON_DEFAULT
+from matecito.padron.bcra import abrir_padron
+from matecito.padron.configuracion import config_padron, LIMITE_BUSQUEDA_MANUAL
 # Armado y lectura de claves contra el padrón, unificado (antes estaba
 # copiado en tres jobs de este archivo, con divergencias entre copias).
 from matecito.nucleo.claves_padron import (armar_claves, consultar_padron,
@@ -65,7 +63,6 @@ from matecito.nucleo.persistencia import (
     cargar_presets,
     guardar_presets,
     guardar_usuario,
-    leer_usuario_guardado,
 )
 from matecito.nucleo.trabajos import JOBS, Job
 from matecito.nucleo.resultados import (
@@ -73,92 +70,39 @@ from matecito.nucleo.resultados import (
     nombre_tabla_resultado,
     sanitizar_identificador,
 )
+from matecito.nucleo.esquemas_sql import (
+    crear_ddl,
+    tipos_columnas as _tipos_columnas,
+    tipos_columnas_normalizacion as _tipos_columnas_normalizacion,
+)
+from matecito.nucleo.sesiones import (
+    CONEXIONES,
+    COOKIE_SESION,
+    obtener_conexion,
+    registrar_conexion,
+    registrar_usuario,
+    usuario_de_sesion,
+)
+from matecito.nucleo.correo import (
+    EMAIL_AGENT_ERR,
+    RUTA_AGENTE,
+    EmailAgent,
+    limitar_emails_osint as _limitar_emails_osint,
+    procesar_fila_mail as _procesar_fila_mail,
+)
 # Módulo REDES SOCIALES · COMPARACIÓN
 from matecito.validadores import comparadores
 from matecito.validadores import osint_email
 
-# =====================================================================
-# PADRON BCRA - CONFIGURACION
-# =====================================================================
-# Modo elegido: DBLINK. La tabla del padron NO se copia: se consulta en su
-# base, desde la conexion Oracle del cliente, a traves de un database link.
-#
-# Aclaracion, porque suele malentenderse: un DBLINK NO apunta a una tabla ni
-# a un esquema puntual. Es una conexion a una BASE remota entera. Hace falta
-# UN link por base destino, no uno por tabla.
-#
-# El nombre del link y la tabla se configuran por variable de entorno, para
-# que el admin del servidor los cambie sin tocar el codigo:
-#     setx MATECITO_DBLINK "DBLINK_DATOS_PROD"
-#
-# El snapshot local (padron_bcra.PadronSnapshot) queda implementado y listo
-# para cuando haya disco disponible en el servidor: cambiar MODO a "snapshot"
-# y definir la ruta. El resto del codigo NO se entera del cambio.
-PADRON_MODO = os.environ.get("MATECITO_PADRON_MODO", "auto")
-PADRON_DBLINK = os.environ.get("MATECITO_DBLINK", "DBLINK_DATOS_PROD")
-PADRON_TABLA = os.environ.get("MATECITO_PADRON_TABLA", TABLA_PADRON_DEFAULT)
-PADRON_RUTA_SNAPSHOT = os.environ.get("MATECITO_PADRON_SNAPSHOT", "")
-
-# Tope de filas de la busqueda manual. NO protege a Oracle (el scan ya ocurrio
-# igual), protege al servidor de MATEcito: sin tope, una busqueda de 1-2 digitos
-# devolveria millones de filas y dejaria sin memoria al proceso, tirando abajo
-# los trabajos de TODOS los usuarios conectados.
-LIMITE_BUSQUEDA_MANUAL = 200
-
-def _limitar_emails_osint(emails, proveedores, limite=LIMITE_INTERACCIONES_OSINT):
-    """Devuelve los emails que entran en el presupuesto de consultas OSINT."""
-    cantidad_proveedores = max(1, len(proveedores))
-    max_emails = limite // cantidad_proveedores
-    return emails[:max_emails], max_emails
-
-
-def config_padron():
-    """Config de la fuente del padron. Por defecto MODO AUTO: Python abre su
-    propia conexion al padron desde las credenciales cifradas (enfoque nexo, sin
-    DBLINK). Se puede forzar otro modo con MATECITO_PADRON_MODO."""
-    if PADRON_MODO == "snapshot":
-        return {"modo": "snapshot", "ruta_snapshot": PADRON_RUTA_SNAPSHOT,
-                "tabla": PADRON_TABLA}
-    if PADRON_MODO == "dblink":
-        return {"modo": "dblink", "dblink": PADRON_DBLINK, "tabla": PADRON_TABLA}
-    # 'auto' (default): credenciales del archivo cifrado en DIR_APP.
-    return {"modo": "auto", "dir_base": RAIZ_PROYECTO, "tabla": PADRON_TABLA}
 from matecito.nucleo.previsualizacion import (previsualizar,
                                              IdentificadorInvalido)
 from matecito.nucleo.normalizador import (normalizar_filas, separar_valores,
                           estadisticas_normalizacion)
 
-# El agente de mails ahora vive DENTRO del paquete
-# (matecito/validadores/mails/agente.py), así que ya no hace falta
-# buscarlo en varias rutas ni depender de una ruta local del proyecto.
-# DIR_APP es la carpeta del paquete; RAIZ_PROYECTO es la raíz del repo.
-
-EmailAgent = None
-EMAIL_AGENT_ERR = ""
-RUTA_AGENTE = DIR_APP
-
-
-def _localizar_agente():
-    global EmailAgent, EMAIL_AGENT_ERR
-    try:
-        from matecito.validadores.mails.agente import EmailDepuratorAgent
-        EmailAgent = EmailDepuratorAgent
-        print("[MATEcito] Agente de mails cargado.")
-    except Exception as e:
-        EMAIL_AGENT_ERR = str(e)
-        print(f"[MATEcito] ⚠ Agente de mails NO disponible: {EMAIL_AGENT_ERR}")
-
-
-_localizar_agente()
-
 os.makedirs(DIR_SALIDAS, exist_ok=True)
 
 app = FastAPI(title="MATEcito Web", version="1.0")
 inicializar_oracle()
-
-
-# Estado de conexiones activas. Se moverá junto con el runtime compartido.
-CONEXIONES = {}  # session_id -> ConexionWeb
 
 
 # =====================================================================
@@ -173,207 +117,11 @@ CONEXIONES = {}  # session_id -> ConexionWeb
 # equivocado. AHORA cada navegador tiene su propia sesión (cookie
 # 'matecito_sid') y su propio nombre. El archivo JSON queda solo como valor
 # por defecto para la PC local (compatibilidad con el uso de siempre).
-SESIONES_USUARIO = {}   # sid -> nombre de usuario
-COOKIE_SESION = "matecito_sid"
-
-
-def usuario_de_sesion(request, defecto=True):
-    """Nombre de usuario de ESTE navegador. Si la sesión no tiene uno todavía,
-    cae al guardado en disco (comportamiento de siempre en la PC local)."""
-    sid = request.cookies.get(COOKIE_SESION, "")
-    if sid and sid in SESIONES_USUARIO:
-        return SESIONES_USUARIO[sid]
-    return leer_usuario_guardado() if defecto else ""
-
-
 # El registro de procesos vive en procesos/registro.py: ES el archivo
 # que se edita para agregar o quitar un proceso.
 from matecito.procesos.registro import (
     PROCESOS, proceso_valido, proceso_necesita_padron,
     proceso_necesita_dos_columnas)
-
-
-def _tipos_columnas(db_type, proceso):
-    # DEPURACION DE MAILS: dos etapas separadas, cada una en su columna. El
-    # mail original nunca se pierde: es lo que permite revertir y auditar.
-    if proceso == "dep_mails":
-        cols = [
-            ("ID_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("MAIL_ORIGINAL", "VARCHAR2(320)", "VARCHAR(320)"),
-            ("MAIL_DEPURADO", "VARCHAR2(320)", "VARCHAR(320)"),
-            ("FUE_DEPURADO", "VARCHAR2(2)", "CHAR(2)"),
-            ("CAMBIOS", "VARCHAR2(1000)", "VARCHAR(1000)"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-        ]
-        idx = 1 if db_type == "oracle" else 2
-        return [(c[0], c[idx]) for c in cols]
-
-    # DEPURACION DE TELEFONOS: prefijo y numeracion SEPARADOS, sin veredicto.
-    # ORIGEN_PAIS deja registrado si el codigo de pais venia en el dato o si
-    # se asumio, que es la unica suposicion que hace este proceso.
-    if proceso == "dep_telefonos":
-        cols = [
-            ("ID_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("TELEFONO_ORIGINAL", "VARCHAR2(200)", "VARCHAR(200)"),
-            ("PREFIJO_PAIS", "VARCHAR2(5)", "VARCHAR(5)"),
-            ("NUMERO_NACIONAL", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("TELEFONO_DEPURADO", "VARCHAR2(30)", "VARCHAR(30)"),
-            ("E164", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("ORIGEN_PAIS", "VARCHAR2(12)", "VARCHAR(12)"),
-            ("FUE_DEPURADO", "VARCHAR2(2)", "CHAR(2)"),
-            ("CAMBIOS", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-        ]
-        idx = 1 if db_type == "oracle" else 2
-        return [(c[0], c[idx]) for c in cols]
-
-    # COMPARACIÓN: el DDL sale del registro de algoritmos de comparadores.py,
-    # no está escrito acá. Agregar o sacar un algoritmo cambia la tabla sin
-    # tocar app.py.
-    if proceso == "comparacion":
-        return comparadores.columnas_tabla(db_type)
-
-    if proceso == "cuit":
-        # VALIDACION DE CUIT (4 estados). Las columnas espejan lo que devuelve
-        # validar_cuit_y_denominacion (validador_cuit.py).
-        cols = [
-            ("ID", "NUMBER GENERATED ALWAYS AS IDENTITY", "INT AUTO_INCREMENT PRIMARY KEY"),
-            ("CUIT_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("DNI_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("DENOMINACION_ORIGEN", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("CUIT_PADRON", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("DENOMINACION_PADRON", "VARCHAR2(255)", "VARCHAR(255)"),
-            ("PORCENTAJE", "NUMBER(5,2)", "DECIMAL(5,2)"),
-            ("UMBRAL", "NUMBER(5,2)", "DECIMAL(5,2)"),
-            ("ESTADO_VALIDACION", "VARCHAR2(60)", "VARCHAR(60)"),
-            ("CANDIDATOS", "NUMBER(3)", "INT"),
-            ("MARCA_BAJA", "VARCHAR2(10)", "VARCHAR(10)"),
-            ("FECHA_FALLECIMIENTO", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("CUIT_REEMPLAZO", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("ALERTAS", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("USUARIO_DECISION", "VARCHAR2(80)", "VARCHAR(80)"),
-            ("FECHA_DECISION", "DATE", "DATETIME"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-        ]
-        idx = 1 if db_type == "oracle" else 2
-        return [(c[0], c[idx]) for c in cols]
-
-    if proceso == "cuitificacion":
-        # Una fila POR CADA DENOMINACION DISTINTA encontrada. Si un numero trae
-        # 3 denominaciones -> 3 filas, las 3 con REVISION='SI'.
-        cols = [
-            ("ID", "NUMBER GENERATED ALWAYS AS IDENTITY", "INT AUTO_INCREMENT PRIMARY KEY"),
-            ("NUMERO_ORIGEN", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("NUMERO_BUSCADO", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("CUIT_ENCONTRADO", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("DENOMINACION_ENCONTRADA", "VARCHAR2(255)", "VARCHAR(255)"),
-            ("DNI_ENCONTRADO", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("MARCA_BAJA", "VARCHAR2(10)", "VARCHAR(10)"),
-            ("FECHA_FALLECIMIENTO", "VARCHAR2(50)", "VARCHAR(50)"),
-            ("CUIT_REEMPLAZO", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("ESTADO", "VARCHAR2(40)", "VARCHAR(40)"),
-            ("REVISION", "VARCHAR2(2)", "VARCHAR(2)"),
-            ("COINCIDENCIAS", "NUMBER(3)", "INT"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-        ]
-        idx = 1 if db_type == "oracle" else 2
-        return [(c[0], c[idx]) for c in cols]
-
-    if proceso == "denominacion":
-        cols = [
-            ("DENOMINACION_ORIGEN", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("DENOMINACION_VALIDAR", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("PORCENTAJE", "NUMBER(5,2)", "DECIMAL(5,2)"),
-            ("UMBRAL", "NUMBER(5,2)", "DECIMAL(5,2)"),
-            ("COINCIDE", "NUMBER(1)", "TINYINT"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-            ("ANALISIS", "VARCHAR2(200)", "VARCHAR(200)"),
-        ]
-    elif proceso == "telefonos":
-        cols = [
-            ("ID_ORIGEN", "VARCHAR2(80)", "VARCHAR(80)"),
-            ("TELEFONO_ORIGINAL", "VARCHAR2(200)", "VARCHAR(200)"),
-            ("TELEFONO_NORMALIZADO", "VARCHAR2(30)", "VARCHAR(30)"),
-            ("CODIGO_PAIS", "VARCHAR2(6)", "VARCHAR(6)"),
-            ("PREFIJO", "VARCHAR2(8)", "VARCHAR(8)"),
-            ("TELEFONO", "VARCHAR2(20)", "VARCHAR(20)"),
-            ("TIPO_TELEFONO", "VARCHAR2(2)", "VARCHAR(2)"),
-            ("TIPO_LINEA", "VARCHAR2(15)", "VARCHAR(15)"),
-            ("VALIDO", "NUMBER(1)", "TINYINT"),
-            ("MOTIVO", "VARCHAR2(300)", "VARCHAR(300)"),
-            ("FECHA_BAJA", "DATE", "DATETIME"),
-            ("USUARIO_BAJA", "VARCHAR2(30)", "VARCHAR(30)"),
-            ("MOTIVO_BAJA", "VARCHAR2(300)", "VARCHAR(300)"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-        ]
-    elif proceso == "osint":
-        cols = [
-            ("ID_ORIGEN", "VARCHAR2(80)", "VARCHAR(80)"),
-            ("MAIL", "VARCHAR2(300)", "VARCHAR(300)"),
-            ("PROVEEDOR", "VARCHAR2(100)", "VARCHAR(100)"),
-            ("CATEGORIA_OSINT", "VARCHAR2(100)", "VARCHAR(100)"),
-            ("ESTADO_OSINT", "VARCHAR2(60)", "VARCHAR(60)"),
-            ("URL_OSINT", "VARCHAR2(1000)", "VARCHAR(1000)"),
-            ("DETALLE_OSINT", "VARCHAR2(2000)", "VARCHAR(2000)"),
-            ("DATOS_OSINT", "CLOB", "TEXT"),
-        ]
-    else:  # mails
-        cols = [
-            ("ID_ORIGEN", "VARCHAR2(80)", "VARCHAR(80)"),
-            ("MAIL_ORIGINAL", "VARCHAR2(300)", "VARCHAR(300)"),
-            ("MAIL_DEPURADO", "VARCHAR2(300)", "VARCHAR(300)"),
-            ("ESTADO", "VARCHAR2(25)", "VARCHAR(25)"),
-            ("VALIDO", "NUMBER(1)", "TINYINT"),
-            ("MOTIVO", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("FECHA_BAJA", "DATE", "DATETIME"),
-            ("USUARIO_BAJA", "VARCHAR2(30)", "VARCHAR(30)"),
-            ("MOTIVO_BAJA", "VARCHAR2(500)", "VARCHAR(500)"),
-            ("FECHA_PROCESO", "DATE", "DATETIME"),
-        ]
-    # Los tipos de MySQL (VARCHAR/TINYINT/DATETIME) también son T-SQL válidos,
-    # así que SQL Server y MariaDB comparten la misma definición.
-    idx = 1 if db_type == "oracle" else 2
-    return [(c[0], c[idx]) for c in cols]
-
-
-def _tipos_columnas_normalizacion(db_type, col_clave, cols_medios, cols_extra):
-    """DDL dinámico para la tabla de salida de NORMALIZACIÓN: conserva la
-    clave, las columnas de medio y las extra, todas como texto (el objetivo
-    es estandarizar la ESTRUCTURA, no cambiar el tipo del dato)."""
-    tipo = "VARCHAR2(300)" if db_type == "oracle" else "VARCHAR(300)"
-    columnas = [(sanitizar_identificador(col_clave) or "CLAVE", tipo)]
-    for m in cols_medios:
-        columnas.append((sanitizar_identificador(m), tipo))
-    for e in cols_extra:
-        columnas.append((sanitizar_identificador(e), tipo))
-    return columnas
-
-
-def _procesar_fila_mail(agente, id_val, mail_val, ahora):
-    res = agente.validar_y_corregir_email(mail_val)
-    mail_res, es_valido, modificado, motivo = res[0], res[1], res[2], res[3]
-    requiere_rev = res[5] if len(res) > 5 else False
-    if requiere_rev:
-        estado = "REVISION MANUAL"
-    elif not es_valido:
-        estado = "BAJA"
-    elif modificado:
-        estado = "MODIFICADO"
-    else:
-        estado = "CONSERVADO"
-    es_baja = estado == "BAJA"
-    return {
-        "ID_ORIGEN": id_val,
-        "MAIL_ORIGINAL": mail_val,
-        "MAIL_DEPURADO": mail_res if (es_valido and not requiere_rev) else None,
-        "ESTADO": estado,
-        "VALIDO": 1 if (es_valido and not requiere_rev) else 0,
-        "MOTIVO": motivo,
-        "FECHA_BAJA": ahora if es_baja else None,
-        "USUARIO_BAJA": USUARIO_AGENTE if es_baja else None,
-        "MOTIVO_BAJA": motivo if es_baja else None,
-        "FECHA_PROCESO": ahora,
-    }
 
 
 def _job_cuitificar_lotes(job, cx, params):
@@ -806,7 +554,7 @@ def _job_procesar_db(job, cx, params):
         # 4. Crear tabla resultado
         destino = f"{esquema}.{tabla_res}" if esquema else tabla_res
         cols_def = _tipos_columnas(cx.db_type, proceso)
-        ddl = f"CREATE TABLE {destino} (" + ", ".join(f"{n} {t}" for n, t in cols_def) + ")"
+        ddl = crear_ddl(destino, cols_def)
         job.escribir(f"Creando tabla resultado {destino}…")
         with cx.lock:
             cur = cx.conn.cursor()
@@ -912,7 +660,7 @@ def _job_normalizar_db(job, cx, params):
         # 4. Crear tabla resultado (todas las columnas como texto)
         destino = f"{esquema}.{tabla_res}" if esquema else tabla_res
         cols_def = _tipos_columnas_normalizacion(cx.db_type, col_clave, cols_medios, cols_extra)
-        ddl = f"CREATE TABLE {destino} (" + ", ".join(f"{n} {t}" for n, t in cols_def) + ")"
+        ddl = crear_ddl(destino, cols_def)
         job.escribir(f"Creando tabla resultado {destino}…")
         with cx.lock:
             cur = cx.conn.cursor()
@@ -1245,8 +993,7 @@ def set_usuario(req: UsuarioRequest, request: Request, response: Response):
     nombre = req.usuario.strip()
     if not nombre:
         raise HTTPException(400, "El usuario no puede quedar vacío")
-    sid = request.cookies.get(COOKIE_SESION) or uuid.uuid4().hex
-    SESIONES_USUARIO[sid] = nombre
+    sid = registrar_usuario(nombre, request.cookies.get(COOKIE_SESION))
     response.set_cookie(COOKIE_SESION, sid, max_age=60 * 60 * 24 * 30,
                         httponly=True, samesite="lax")
     guardar_usuario(nombre)
@@ -1276,8 +1023,7 @@ def conectar(req: ConexionRequest):
         cx.conectar()
     except Exception as e:
         raise HTTPException(400, f"No se pudo conectar: {e}")
-    sid = uuid.uuid4().hex[:16]
-    CONEXIONES[sid] = cx
+    sid = registrar_conexion(cx)
     try:
         esquemas = cx.esquemas()
     except Exception as e:
@@ -1287,7 +1033,7 @@ def conectar(req: ConexionRequest):
 
 @app.get("/api/conexion/{sid}/tablas")
 def api_tablas(sid: str, esquema: str):
-    cx = CONEXIONES.get(sid)
+    cx = obtener_conexion(sid)
     if not cx:
         raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
     try:
@@ -1298,7 +1044,7 @@ def api_tablas(sid: str, esquema: str):
 
 @app.get("/api/conexion/{sid}/columnas")
 def api_columnas(sid: str, esquema: str, tabla: str):
-    cx = CONEXIONES.get(sid)
+    cx = obtener_conexion(sid)
     if not cx:
         raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
     try:
@@ -1321,7 +1067,7 @@ def api_muestra(sid: str, esquema: str, tabla: str, columnas: str = "",
 
     `columnas` es una lista separada por comas. Vacía = todas.
     """
-    cx = CONEXIONES.get(sid)
+    cx = obtener_conexion(sid)
     if not cx:
         raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
     cols = [c.strip() for c in columnas.split(",") if c.strip()] or None
@@ -1348,7 +1094,7 @@ def api_muestra(sid: str, esquema: str, tabla: str, columnas: str = "",
 
 @app.post("/api/procesos/db")
 def procesar_db(req: ProcesoDBRequest):
-    cx = CONEXIONES.get(req.session_id)
+    cx = obtener_conexion(req.session_id)
     if not cx:
         raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
     # La lista de procesos válidos sale del registro PROCESOS, no de una
@@ -1401,7 +1147,7 @@ def procesar_db(req: ProcesoDBRequest):
 
 @app.post("/api/normalizacion/db")
 def normalizar_db(req: NormalizacionDBRequest):
-    cx = CONEXIONES.get(req.session_id)
+    cx = obtener_conexion(req.session_id)
     if not cx:
         raise HTTPException(404, "Sesión de conexión no encontrada; conectá de nuevo.")
     cols_medios = [c for c in req.cols_medios if c]
@@ -1547,7 +1293,7 @@ def padron_buscar(numero: str, sid: str = ""):
     cfg = config_padron()
     # Solo el modo dblink necesita la conexion del cliente (el padron viaja por
     # el link de esa sesion). En 'auto' y 'snapshot' la consulta es autonoma.
-    cx = CONEXIONES.get(sid) if sid else None
+    cx = obtener_conexion(sid) if sid else None
     if cfg["modo"] == "dblink" and not cx:
         raise HTTPException(
             400, "Este servidor está configurado en modo DBLINK: conectate a una "

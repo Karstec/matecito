@@ -26,7 +26,15 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+
+from matecito.api.schemas import (
+    ConexionRequest,
+    NormalizacionDBRequest,
+    PresetRequest,
+    ProcesoDBRequest,
+    UsuarioRequest,
+)
+from matecito.config import LIMITE_INTERACCIONES_OSINT
 
 # --- lógica de validación ---
 from matecito.validadores.telefonos import (validar_telefono, fila_resultado,
@@ -72,11 +80,6 @@ PADRON_RUTA_SNAPSHOT = os.environ.get("MATECITO_PADRON_SNAPSHOT", "")
 # devolveria millones de filas y dejaria sin memoria al proceso, tirando abajo
 # los trabajos de TODOS los usuarios conectados.
 LIMITE_BUSQUEDA_MANUAL = 200
-
-# Cada email se consulta una vez por proveedor seleccionado. Este tope evita
-# ráfagas que puedan ser interpretadas como abuso por los proveedores OSINT.
-LIMITE_INTERACCIONES_OSINT = 20_000
-
 
 def _limitar_emails_osint(emails, proveedores, limite=LIMITE_INTERACCIONES_OSINT):
     """Devuelve los emails que entran en el presupuesto de consultas OSINT."""
@@ -1688,58 +1691,6 @@ def _job_normalizar_archivo(job, filas, encabezado, idx_clave, idxs_medios,
         job.error = str(e)
         job.escribir(f">>> ERROR: {e}")
         job.finalizar("ERROR")
-
-
-# =====================================================================
-# MODELOS DE REQUEST
-# =====================================================================
-class ConexionRequest(BaseModel):
-    db_type: str
-    host: str
-    port: str = ""
-    user: str
-    password: str = ""
-    dbname: str = ""
-
-
-class ProcesoDBRequest(BaseModel):
-    session_id: str
-    proceso: str            # "telefonos" | "mails"
-    esquema: str
-    tabla: str
-    col_id: str             # columna del CUIT / identificador
-    col_dato: str           # columna del teléfono o del mail
-    tipo_busqueda: str = "cuit"   # "cuit" | "dni" (para cuit y cuitificación)
-    # Domicilios: mapeo campo_del_cubo -> columna real de la tabla del cliente.
-    # Ej: {"CALLE": "DOM_CALLE", "NUMERO": "DOM_NRO", "BARRIO": "DOM_BARRIO"}
-    mapa_domicilio: dict = {}
-    usuario: str
-    cliente: str = ""
-    pais: str = "AR"
-    umbral: float = UMBRAL_COINCIDENTE_DEFAULT   # denominación y validación de CUIT (0-100)
-    proveedores_osint: list[str] = Field(default_factory=list)
-    limite_interacciones_osint: int = Field(LIMITE_INTERACCIONES_OSINT, ge=1,
-                                             le=LIMITE_INTERACCIONES_OSINT)
-
-
-class NormalizacionDBRequest(BaseModel):
-    session_id: str
-    esquema: str
-    tabla: str
-    col_clave: str                  # columna del CUIT / identificador
-    cols_medios: list               # columnas a explotar (teléfonos y/o mails)
-    cols_extra: list = []           # columnas a arrastrar sin tocar (ORIGEN, etc.)
-    usuario: str
-    cliente: str = ""
-
-
-class PresetRequest(BaseModel):
-    nombre: str
-    datos: dict
-
-
-class UsuarioRequest(BaseModel):
-    usuario: str
 
 
 # =====================================================================
